@@ -372,6 +372,62 @@ body {
   height: 100%; background: var(--accent);
   border-radius: 2px; transition: width 0.1s linear;
 }
+
+/* ── Listener / Microphone ── */
+.listen-status {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 12px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.listen-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.listen-dot.idle { background: var(--text2); opacity: 0.4; }
+.listen-dot.listening {
+  background: var(--blue);
+  box-shadow: 0 0 8px var(--blue);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.listen-dot.receiving {
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: pulse 0.4s ease-in-out infinite;
+}
+
+.mic-spectrum-canvas {
+  width: 100%; height: 80px;
+  display: block;
+}
+
+.rx-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.rx-badge.acoustic {
+  background: rgba(0,212,170,0.15);
+  color: var(--accent);
+  border: 1px solid rgba(0,212,170,0.3);
+}
+
+.rx-badge.local {
+  background: rgba(74,158,255,0.1);
+  color: var(--blue);
+  border: 1px solid rgba(74,158,255,0.2);
+}
 </style>
 </head>
 <body>
@@ -674,6 +730,274 @@ const AILL = (() => {
 
 
 // ═══════════════════════════════════════════════════════════════════════
+// AILL ACOUSTIC RECEIVER — Microphone-based tone decoder
+// ═══════════════════════════════════════════════════════════════════════
+
+const AILLReceiver = (() => {
+  let micCtx = null;
+  let micAnalyser = null;
+  let micStream = null;
+  let listening = false;
+  let state = 'IDLE'; // IDLE, LISTENING, SYNC_RISING, SYNC_WAIT, RECEIVING
+  let onReceiveCb = null;
+  let onLogCb = null;
+  let onStateCb = null;
+  let frameId = null;
+
+  // Receiver state
+  let receivedSymbols = [];
+  let symbolStartTime = 0;
+  let syncDetectTime = 0;
+  let noiseFloor = 40;
+  let symbolCount = 0;
+
+  const RX_FFT_SIZE = 4096;
+  const TONE_THRESHOLD_RATIO = 2.0;
+  const FRAME_TIME_MS = (AILL.FRAME_TIME) * 1000; // ~60ms
+  const MAX_SILENCE_MS = 250;
+
+  function freqToBin(freq) {
+    return Math.round(freq * RX_FFT_SIZE / micCtx.sampleRate);
+  }
+
+  function getBinMag(freqData, freq) {
+    const bin = freqToBin(freq);
+    let m = freqData[bin];
+    if (bin > 0) m = Math.max(m, freqData[bin - 1]);
+    if (bin < freqData.length - 1) m = Math.max(m, freqData[bin + 1]);
+    return m;
+  }
+
+  function bandEnergy(freqData, lo, hi) {
+    const a = freqToBin(lo), b = freqToBin(hi);
+    let s = 0, n = 0;
+    for (let i = Math.max(0, a); i <= Math.min(freqData.length - 1, b); i++) { s += freqData[i]; n++; }
+    return n > 0 ? s / n : 0;
+  }
+
+  function updateNoiseFloor(freqData) {
+    // Use 2500-4000Hz as reference band (outside AILL signal)
+    const nf = bandEnergy(freqData, 2500, 4000);
+    noiseFloor = noiseFloor * 0.93 + nf * 0.07;
+  }
+
+  function log(type, msg) { if (onLogCb) onLogCb(type, msg); }
+
+  function setState(s) {
+    state = s;
+    if (onStateCb) onStateCb(s);
+  }
+
+  async function start(onReceive, onLog, onStateChange) {
+    onReceiveCb = onReceive;
+    onLogCb = onLog;
+    onStateCb = onStateChange;
+
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      });
+    } catch (e) {
+      log('warn', 'Microphone access denied: ' + e.message);
+      return false;
+    }
+
+    micCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = micCtx.createMediaStreamSource(micStream);
+    micAnalyser = micCtx.createAnalyser();
+    micAnalyser.fftSize = RX_FFT_SIZE;
+    micAnalyser.smoothingTimeConstant = 0.4;
+    source.connect(micAnalyser);
+    // NOT connected to destination — prevents feedback
+
+    listening = true;
+    setState('LISTENING');
+    receivedSymbols = [];
+    noiseFloor = 40;
+
+    log('info', 'Microphone active — listening for AILL transmissions...');
+    processFrame();
+    return true;
+  }
+
+  function stop() {
+    listening = false;
+    setState('IDLE');
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (frameId) { cancelAnimationFrame(frameId); frameId = null; }
+    if (micCtx) { micCtx.close(); micCtx = null; }
+    micAnalyser = null;
+    log('info', 'Stopped listening.');
+  }
+
+  function processFrame() {
+    if (!listening || !micAnalyser) return;
+
+    const freqData = new Uint8Array(micAnalyser.frequencyBinCount);
+    micAnalyser.getByteFrequencyData(freqData);
+    const now = performance.now();
+
+    updateNoiseFloor(freqData);
+    const threshold = Math.max(70, noiseFloor * TONE_THRESHOLD_RATIO);
+
+    switch (state) {
+      case 'LISTENING': {
+        // Detect sync chirp start: strong low-band energy, quiet high-band
+        const lo = bandEnergy(freqData, 250, 550);
+        const hi = bandEnergy(freqData, 1400, 1900);
+        if (lo > threshold * 1.2 && hi < threshold * 0.5) {
+          syncDetectTime = now;
+          setState('SYNC_RISING');
+        }
+        break;
+      }
+      case 'SYNC_RISING': {
+        const elapsed = now - syncDetectTime;
+        const hi = bandEnergy(freqData, 1400, 1900);
+        if (hi > threshold * 0.8 && elapsed > 60 && elapsed < 400) {
+          // Chirp swept from low to high — sync acquired
+          syncDetectTime = now;
+          setState('SYNC_WAIT');
+          log('rx', 'Sync chirp detected — acquiring data stream...');
+        } else if (elapsed > 400) {
+          setState('LISTENING'); // false positive
+        }
+        break;
+      }
+      case 'SYNC_WAIT': {
+        // Brief pause after chirp ends before data symbols begin
+        if (now - syncDetectTime > 40) {
+          setState('RECEIVING');
+          receivedSymbols = [];
+          symbolStartTime = now;
+          symbolCount = 0;
+        }
+        break;
+      }
+      case 'RECEIVING': {
+        const elapsed = now - symbolStartTime;
+
+        // Check for end chirp (high energy sweeping down to low)
+        const hi = bandEnergy(freqData, 1400, 1900);
+        const lo = bandEnergy(freqData, 250, 550);
+
+        // Sample tones at FRAME_TIME intervals
+        if (elapsed >= FRAME_TIME_MS * 0.75) {
+          const sym = decodeToneSymbol(freqData, threshold);
+          if (sym !== null) {
+            receivedSymbols.push(sym);
+            symbolCount++;
+            symbolStartTime = now;
+          } else if (hi > threshold * 0.8 && symbolCount > 2) {
+            // Possible end chirp — wait for it to finish then decode
+            setTimeout(() => { if (state === 'RECEIVING') finishReceiving(); }, 150);
+            setState('LISTENING'); // prevent double finish
+            return;
+          } else if (elapsed > MAX_SILENCE_MS && symbolCount > 0) {
+            finishReceiving();
+            return;
+          }
+        }
+        break;
+      }
+    }
+
+    frameId = requestAnimationFrame(processFrame);
+  }
+
+  function decodeToneSymbol(freqData, threshold) {
+    const BASE = AILL.BASE_FREQ;   // 600
+    const SPACE = AILL.TONE_SPACING; // 100
+    let active = 0;
+    let loAny = false, hiAny = false;
+
+    for (let i = 0; i < 8; i++) {
+      const mag = getBinMag(freqData, BASE + i * SPACE);
+      if (mag > threshold) {
+        active |= (1 << i);
+        if (i < 4) loAny = true; else hiAny = true;
+      }
+    }
+
+    if (!loAny && !hiAny) return null;
+
+    let nibble = 0, half;
+    if (hiAny && !loAny) {
+      half = 'hi';
+      for (let b = 0; b < 4; b++) if (active & (1 << (b + 4))) nibble |= (1 << b);
+    } else if (loAny && !hiAny) {
+      half = 'lo';
+      for (let b = 0; b < 4; b++) if (active & (1 << b)) nibble |= (1 << b);
+    } else {
+      // Both bands active — pick the stronger one
+      let loS = 0, hiS = 0;
+      for (let i = 0; i < 4; i++) {
+        loS += getBinMag(freqData, BASE + i * SPACE);
+        hiS += getBinMag(freqData, BASE + (i + 4) * SPACE);
+      }
+      if (hiS > loS) {
+        half = 'hi';
+        for (let b = 0; b < 4; b++) if (active & (1 << (b + 4))) nibble |= (1 << b);
+      } else {
+        half = 'lo';
+        for (let b = 0; b < 4; b++) if (active & (1 << b)) nibble |= (1 << b);
+      }
+    }
+    return { half, value: nibble };
+  }
+
+  function finishReceiving() {
+    setState('LISTENING');
+
+    if (receivedSymbols.length < 4) {
+      log('warn', `Short reception: ${receivedSymbols.length} symbols (discarded)`);
+      receivedSymbols = [];
+      return;
+    }
+
+    log('rx', `Received ${receivedSymbols.length} tone symbols, reassembling...`);
+
+    // Reconstruct bytes from hi/lo nibble pairs
+    const bytes = [];
+    let i = 0;
+    while (i < receivedSymbols.length - 1) {
+      const s1 = receivedSymbols[i], s2 = receivedSymbols[i + 1];
+      if (s1.half === 'hi' && s2.half === 'lo') {
+        bytes.push((s1.value << 4) | s2.value);
+        i += 2;
+      } else if (s1.half === 'lo' && s2.half === 'hi') {
+        bytes.push((s2.value << 4) | s1.value);
+        i += 2;
+      } else {
+        i++; // skip mismatched symbol
+      }
+    }
+
+    const wire = new Uint8Array(bytes);
+    const hexPreview = Array.from(wire.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    log('rx', `Decoded ${wire.length} bytes: ${hexPreview}${wire.length > 20 ? ' ...' : ''}`);
+    log('rx', `CRC-8: 0x${AILL.crc8(wire).toString(16).toUpperCase().padStart(2, '0')}`);
+
+    const decoded = AILL.decode(wire);
+    if (decoded) {
+      log('rx', `AILL message decoded: type=${decoded.type || 'data'}, content="${(decoded.content || '').slice(0, 60)}${(decoded.content || '').length > 60 ? '...' : ''}"`);
+    } else {
+      log('warn', 'Could not parse AILL structure — raw bytes delivered');
+    }
+
+    if (onReceiveCb) onReceiveCb(wire, decoded);
+    receivedSymbols = [];
+    symbolCount = 0;
+  }
+
+  function getAnalyser() { return micAnalyser; }
+  function getCtx() { return micCtx; }
+
+  return { start, stop, isListening: () => listening, getState: () => state, getAnalyser, getCtx };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════
 // SINGING ENGINE
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -837,9 +1161,10 @@ let analyser = null;
 let activeTab = 'singing';
 let logLines = [];
 let singingState = { active: false, agents: [], songKey: 'greeting', partIndex: 0 };
-let shareState = { transmitting: false, received: [] };
+let shareState = { transmitting: false, received: [], listening: false, listenerState: 'IDLE' };
 let waveformAnimId = null;
 let spectrumAnimId = null;
+let micSpectrumAnimId = null;
 
 function ensureAudioCtx() {
   if (!audioCtx) {
@@ -1027,67 +1352,241 @@ function stopSinging() {
 // ═══════════════════════════════════════════════════════════════════════
 
 function renderShare() {
+  const isListening = shareState.listening;
+  const lState = shareState.listenerState;
+  const dotClass = lState === 'RECEIVING' ? 'receiving' : isListening ? 'listening' : 'idle';
+  const stateLabel = {
+    'IDLE': 'Idle', 'LISTENING': 'Listening...', 'SYNC_RISING': 'Detecting chirp...',
+    'SYNC_WAIT': 'Sync acquired', 'RECEIVING': 'Receiving data!'
+  }[lState] || lState;
+
+  const rxItems = shareState.received.filter(r => r.direction === 'rx');
+  const txItems = shareState.received.filter(r => r.direction === 'tx');
+
   return `
-    <div class="card fade-in">
-      <div class="card-title">📡 AILL Content Sharing</div>
-      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;line-height:1.6">
-        Enter a URL or text message below. AILL will encode it into acoustic symbols and transmit
-        through your speakers. Any device running this page within hearing range will detect the
-        transmission, decode the AILL signal, and display the content.
-      </p>
-      <div class="input-group">
-        <input type="text" class="text-input" id="shareInput"
-               placeholder="Enter a URL (https://...) or text message" />
-        <button class="btn btn-primary" id="btnTransmit" onclick="transmitContent()">
-          📡 Transmit
-        </button>
+    <div class="grid-2 fade-in">
+      <div class="card">
+        <div class="card-title">📡 Transmit</div>
+        <p style="color:var(--text2);font-size:12px;margin-bottom:12px;line-height:1.5">
+          Encode a message as AILL acoustic tones and play through speakers.
+        </p>
+        <div class="input-group">
+          <input type="text" class="text-input" id="shareInput"
+                 placeholder="URL or text message..." />
+          <button class="btn btn-primary" id="btnTransmit" onclick="transmitContent()">
+            📡 Send
+          </button>
+        </div>
+        <div id="txProgress" style="display:none">
+          <div style="font-size:12px;color:var(--text2);margin:8px 0">Transmitting...</div>
+          <div class="tx-progress"><div class="tx-progress-bar" id="txBar" style="width:0%"></div></div>
+        </div>
+        <div id="transmittedList" style="margin-top:12px">
+          ${txItems.map(r => `
+            <div class="received-content">
+              <div class="content-type">Sent: ${r.type} <span class="rx-badge local">speaker</span></div>
+              <div class="content-body">${escapeHtml(r.content)}</div>
+              <div style="font-size:10px;color:var(--text2);margin-top:6px;font-family:var(--font-mono)">${r.bytes}B | ${r.duration}s</div>
+            </div>
+          `).join('') || '<div style="color:var(--text2);font-size:12px;margin-top:8px">No transmissions yet</div>'}
+        </div>
       </div>
-      <div id="txProgress" style="display:none">
-        <div style="font-size:12px;color:var(--text2);margin:8px 0">Transmitting...</div>
-        <div class="tx-progress"><div class="tx-progress-bar" id="txBar" style="width:0%"></div></div>
+
+      <div class="card">
+        <div class="card-title">🎙 Receive</div>
+        <p style="color:var(--text2);font-size:12px;margin-bottom:12px;line-height:1.5">
+          Listen via microphone for AILL transmissions from nearby devices.
+        </p>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn ${isListening ? 'btn-danger' : 'btn-primary'}" id="btnListen"
+                  onclick="${isListening ? 'stopListeningMode()' : 'startListeningMode()'}">
+            ${isListening ? '◼ Stop Listening' : '🎙 Start Listening'}
+          </button>
+        </div>
+        <div class="listen-status">
+          <div class="listen-dot ${dotClass}"></div>
+          <span style="color:${isListening ? 'var(--accent)' : 'var(--text2)'}">${stateLabel}</span>
+          ${isListening ? `<span style="margin-left:auto;font-size:10px;color:var(--text2)">MIC ON</span>` : ''}
+        </div>
+        ${isListening ? `
+        <div class="waveform-container" style="margin-bottom:12px">
+          <canvas class="mic-spectrum-canvas" id="micSpecCanvas"></canvas>
+          <div class="waveform-label">MICROPHONE INPUT</div>
+        </div>` : ''}
+        <div id="receivedList">
+          ${rxItems.map(r => `
+            <div class="received-content">
+              <div class="content-type">Received: ${r.type || 'data'} <span class="rx-badge ${r.source === 'mic' ? 'acoustic' : 'local'}">${r.source === 'mic' ? 'acoustic' : 'local'}</span></div>
+              <div class="content-body">${r.type === 'url' ? `<a href="${escapeHtml(r.content)}" target="_blank">${escapeHtml(r.content)}</a>` : escapeHtml(r.content)}</div>
+              <div style="font-size:10px;color:var(--text2);margin-top:6px;font-family:var(--font-mono)">${r.bytes}B decoded</div>
+            </div>
+          `).join('') || `<div style="color:var(--text2);font-size:12px;margin-top:8px">${isListening ? 'Waiting for signal...' : 'Start listening to receive'}</div>`}
+        </div>
       </div>
     </div>
 
     <div class="grid-2">
       <div class="card">
-        <div class="card-title">📤 Transmitted</div>
-        <div id="transmittedList">
-          ${shareState.received.filter(r => r.direction === 'tx').map(r => `
-            <div class="received-content">
-              <div class="content-type">📤 Sent: ${r.type}</div>
-              <div class="content-body">${r.type === 'url' ? `<a href="${r.content}" target="_blank">${r.content}</a>` : r.content}</div>
-              <div style="font-size:10px;color:var(--text2);margin-top:6px;font-family:var(--font-mono)">${r.bytes}B encoded | ${r.duration}s transmission</div>
-            </div>
-          `).join('') || '<div style="color:var(--text2);font-size:13px">No transmissions yet</div>'}
+        <div class="card-title">Speaker Output</div>
+        <div class="waveform-container">
+          <canvas class="waveform-canvas" id="waveCanvas"></canvas>
+          <div class="waveform-label">TX WAVEFORM</div>
         </div>
       </div>
       <div class="card">
-        <div class="card-title">📥 Received</div>
-        <div id="receivedList">
-          ${shareState.received.filter(r => r.direction === 'rx').map(r => `
-            <div class="received-content">
-              <div class="content-type">📥 Received: ${r.type}</div>
-              <div class="content-body">${r.type === 'url' ? `<a href="${r.content}" target="_blank">${r.content}</a>` : r.content}</div>
-              <div style="font-size:10px;color:var(--text2);margin-top:6px;font-family:var(--font-mono)">${r.bytes}B decoded | CRC: ✓</div>
-            </div>
-          `).join('') || '<div style="color:var(--text2);font-size:13px">Listening for AILL transmissions...</div>'}
+        <div class="card-title">Spectrum</div>
+        <div class="waveform-container">
+          <canvas class="spectrum-canvas" id="specCanvas"></canvas>
+          <div class="waveform-label">FREQUENCY DOMAIN</div>
         </div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-title">Acoustic Waveform</div>
-      <div class="waveform-container">
-        <canvas class="waveform-canvas" id="waveCanvas"></canvas>
-        <div class="waveform-label">AILL SIGNAL</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">📋 Protocol Log</div>
+      <div class="card-title">📋 Communication Log</div>
       <div class="log-console" id="logConsole"></div>
     </div>
   `;
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+async function startListeningMode() {
+  shareState.listening = true;
+  shareState.listenerState = 'LISTENING';
+  setStatus('LISTENING', 'var(--blue)');
+  renderTab();
+
+  const ok = await AILLReceiver.start(
+    // onReceive
+    (wireData, decoded) => {
+      const content = decoded?.content || Array.from(wireData.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      const type = decoded?.type || 'raw';
+      shareState.received.push({
+        direction: 'rx', type, content,
+        bytes: wireData.length,
+        source: 'mic',
+        timestamp: Date.now()
+      });
+      renderTab();
+    },
+    // onLog
+    (type, msg) => addLog(type, msg),
+    // onStateChange
+    (newState) => {
+      shareState.listenerState = newState;
+      // Update the status dot and label without full re-render
+      const dot = document.querySelector('.listen-dot');
+      const label = document.querySelector('.listen-status span');
+      if (dot) {
+        dot.className = 'listen-dot ' + (newState === 'RECEIVING' ? 'receiving' : 'listening');
+      }
+      if (label) {
+        const stateLabel = {
+          'LISTENING': 'Listening...', 'SYNC_RISING': 'Detecting chirp...',
+          'SYNC_WAIT': 'Sync acquired', 'RECEIVING': 'Receiving data!'
+        }[newState] || newState;
+        label.textContent = stateLabel;
+        label.style.color = newState === 'RECEIVING' ? 'var(--accent)' : 'var(--blue)';
+      }
+      if (newState === 'RECEIVING') {
+        setStatus('RECEIVING', 'var(--accent)');
+      } else if (newState === 'LISTENING') {
+        setStatus('LISTENING', 'var(--blue)');
+      }
+    }
+  );
+
+  if (!ok) {
+    shareState.listening = false;
+    shareState.listenerState = 'IDLE';
+    setStatus('IDLE', 'var(--accent)');
+    renderTab();
+    return;
+  }
+
+  // Start mic spectrum visualization
+  startMicSpectrum();
+}
+
+function stopListeningMode() {
+  AILLReceiver.stop();
+  shareState.listening = false;
+  shareState.listenerState = 'IDLE';
+  setStatus('IDLE', 'var(--accent)');
+  if (micSpectrumAnimId) { cancelAnimationFrame(micSpectrumAnimId); micSpectrumAnimId = null; }
+  renderTab();
+}
+
+function startMicSpectrum() {
+  const rxAnalyser = AILLReceiver.getAnalyser();
+  const rxCtx = AILLReceiver.getCtx();
+  if (!rxAnalyser || !rxCtx) return;
+
+  function draw() {
+    const canvas = document.getElementById('micSpecCanvas');
+    if (!canvas || !shareState.listening) { micSpectrumAnimId = null; return; }
+    micSpectrumAnimId = requestAnimationFrame(draw);
+
+    const ctx2d = canvas.getContext('2d');
+    canvas.width = canvas.offsetWidth * 2;
+    canvas.height = canvas.offsetHeight * 2;
+    const w = canvas.width, h = canvas.height;
+
+    const bufLen = rxAnalyser.frequencyBinCount;
+    const data = new Uint8Array(bufLen);
+    rxAnalyser.getByteFrequencyData(data);
+
+    ctx2d.fillStyle = '#0a0c10';
+    ctx2d.fillRect(0, 0, w, h);
+
+    // Show 0-2200Hz range (covers all AILL tones)
+    const maxBin = Math.floor(2200 / (rxCtx.sampleRate / rxAnalyser.fftSize));
+    const barW = w / maxBin;
+
+    for (let i = 0; i < maxBin; i++) {
+      const val = data[i] / 255;
+      const barH = val * h;
+      const freq = i * rxCtx.sampleRate / rxAnalyser.fftSize;
+
+      // Highlight AILL tone frequencies (600-1300Hz)
+      let hue, sat;
+      if (freq >= 580 && freq <= 1320) {
+        hue = 165; sat = 90; // teal — signal band
+      } else if (freq >= 250 && freq <= 550) {
+        hue = 45; sat = 80; // amber — sync band
+      } else {
+        hue = 220; sat = 30; // dim blue — noise
+      }
+
+      ctx2d.fillStyle = `hsla(${hue}, ${sat}%, ${35 + val * 35}%, ${0.3 + val * 0.7})`;
+      ctx2d.fillRect(i * barW, h - barH, barW - 1, barH);
+    }
+
+    // Frequency labels
+    ctx2d.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx2d.font = '14px JetBrains Mono';
+    [300, 600, 900, 1200, 1500, 1800].forEach(f => {
+      const x = (f / 2200) * w;
+      ctx2d.fillText(`${f}`, x, h - 4);
+    });
+
+    // Mark AILL tone band
+    const bandL = (580 / 2200) * w, bandR = (1320 / 2200) * w;
+    ctx2d.strokeStyle = 'rgba(0,212,170,0.25)';
+    ctx2d.lineWidth = 1;
+    ctx2d.setLineDash([4, 4]);
+    ctx2d.beginPath();
+    ctx2d.moveTo(bandL, 0); ctx2d.lineTo(bandL, h);
+    ctx2d.moveTo(bandR, 0); ctx2d.lineTo(bandR, h);
+    ctx2d.stroke();
+    ctx2d.setLineDash([]);
+  }
+  draw();
 }
 
 async function transmitContent() {
@@ -1104,11 +1603,11 @@ async function transmitContent() {
   const tones = AILL.encodeToTones(wire);
   const duration = AILL.calcDuration(wire);
 
-  addLog('info', `─── Content Share: ${type.toUpperCase()} ───`);
-  addLog('tx', `Encoding ${content.length} chars as AILL wire format: ${wire.length} bytes`);
+  addLog('info', `─── Transmitting: ${type.toUpperCase()} ───`);
+  addLog('tx', `Encoding ${content.length} chars → ${wire.length} bytes wire format`);
   addLog('tx', `CRC-8: 0x${AILL.crc8(wire).toString(16).toUpperCase().padStart(2,'0')}`);
-  addLog('tx', `Tone symbols: ${tones.length} | Duration: ${duration.toFixed(2)}s`);
-  addLog('tx', `Transmitting on acoustic channel...`);
+  addLog('tx', `${tones.length} tone symbols | ${duration.toFixed(2)}s duration`);
+  addLog('tx', `Playing acoustic signal...`);
 
   // Show progress
   const prog = document.getElementById('txProgress');
@@ -1116,10 +1615,11 @@ async function transmitContent() {
   if (prog) prog.style.display = 'block';
 
   setStatus('TRANSMITTING', 'var(--yellow)');
-  document.getElementById('btnTransmit').disabled = true;
+  const btn = document.getElementById('btnTransmit');
+  if (btn) btn.disabled = true;
 
-  // Play the tones
-  AILL.playTones(ctx, tones, ctx.currentTime + 0.05, 0.12);
+  // Play the tones through speakers
+  AILL.playTones(ctx, tones, ctx.currentTime + 0.05, 0.15);
   startVisualizations();
 
   // Animate progress
@@ -1140,33 +1640,16 @@ async function transmitContent() {
     timestamp: Date.now()
   });
 
-  // Simulate reception after transmission completes
+  // Clean up after transmission completes
   setTimeout(() => {
-    addLog('rx', `Signal detected: sync chirp acquired`);
-    addLog('rx', `Decoding ${wire.length * 2} symbols...`);
-
-    const decoded = AILL.decode(wire);
-    if (decoded) {
-      addLog('rx', `✓ Decoded: type=${decoded.type || type}, length=${(decoded.content || content).length}`);
-      addLog('rx', `✓ CRC verified. Content received successfully.`);
-
-      shareState.received.push({
-        direction: 'rx', type: decoded.type || type,
-        content: decoded.content || content,
-        bytes: wire.length,
-        timestamp: Date.now()
-      });
-    } else {
-      addLog('warn', `✗ Decode failed - CRC mismatch or corrupted signal`);
-    }
-
-    setStatus('IDLE', 'var(--accent)');
+    addLog('tx', `Transmission complete (${wire.length} bytes sent)`);
+    setStatus(shareState.listening ? 'LISTENING' : 'IDLE', shareState.listening ? 'var(--blue)' : 'var(--accent)');
     if (prog) prog.style.display = 'none';
-    document.getElementById('btnTransmit').disabled = false;
+    if (btn) btn.disabled = false;
     input.value = '';
-    renderTab(); // refresh display
+    renderTab();
     setTimeout(() => stopVisualizations(), 500);
-  }, totalMs + 300);
+  }, totalMs + 200);
 }
 
 
@@ -1427,8 +1910,12 @@ function drawSpectrum() {
 function renderTab() {
   const main = document.getElementById('mainContent');
   stopVisualizations();
+  if (micSpectrumAnimId) { cancelAnimationFrame(micSpectrumAnimId); micSpectrumAnimId = null; }
   if (activeTab === 'singing') main.innerHTML = renderSinging();
-  else if (activeTab === 'share') main.innerHTML = renderShare();
+  else if (activeTab === 'share') {
+    main.innerHTML = renderShare();
+    if (shareState.listening) startMicSpectrum();
+  }
   else if (activeTab === 'inspector') main.innerHTML = renderInspector();
   updateLogConsole();
 }

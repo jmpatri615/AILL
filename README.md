@@ -37,8 +37,7 @@ AILL/
 │       └── simulation.py              Multi-agent drone/station scenario
 │
 ├── web/                               Web demos
-│   ├── demo.html                      Interactive browser demo with Web Audio
-│   └── simulation.jsx                 React terrain mapping simulation
+│   └── demo.html                      Interactive browser demo with Web Audio
 │
 └── docs/                              Documentation
     └── test_output.txt                Sample conformance test + simulation output
