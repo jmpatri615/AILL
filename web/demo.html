@@ -1,0 +1,1451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AILL — Acoustic Inter-agent Linguistic Link</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@200;300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0c10;
+  --bg2: #12151c;
+  --bg3: #1a1e28;
+  --surface: #222836;
+  --border: #2a3040;
+  --text: #e0e4ec;
+  --text2: #8890a0;
+  --accent: #00d4aa;
+  --accent2: #00a888;
+  --accent-glow: rgba(0,212,170,0.15);
+  --warn: #ff6b4a;
+  --blue: #4a9eff;
+  --purple: #a855f7;
+  --pink: #ec4899;
+  --yellow: #fbbf24;
+  --font-display: 'Outfit', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-display);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Ambient Background ── */
+.ambient {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(ellipse 800px 600px at 20% 20%, rgba(0,212,170,0.04) 0%, transparent 70%),
+    radial-gradient(ellipse 600px 800px at 80% 80%, rgba(74,158,255,0.03) 0%, transparent 70%),
+    radial-gradient(ellipse 400px 400px at 50% 50%, rgba(168,85,247,0.02) 0%, transparent 70%);
+}
+
+/* ── Header ── */
+.header {
+  position: relative; z-index: 10;
+  padding: 24px 32px;
+  display: flex; align-items: center; gap: 16px;
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(20px);
+  background: rgba(10,12,16,0.8);
+}
+
+.logo {
+  font-family: var(--font-mono);
+  font-size: 24px; font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 2px;
+  text-shadow: 0 0 20px var(--accent-glow);
+}
+
+.logo-sub {
+  font-size: 13px; color: var(--text2);
+  font-weight: 300; letter-spacing: 0.5px;
+}
+
+.header-right {
+  margin-left: auto; display: flex; align-items: center; gap: 12px;
+}
+
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.status-text { font-size: 12px; color: var(--text2); font-family: var(--font-mono); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* ── Tabs ── */
+.tabs {
+  position: relative; z-index: 10;
+  display: flex; gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  padding: 0 24px;
+}
+
+.tab {
+  padding: 14px 24px;
+  font-size: 13px; font-weight: 500;
+  color: var(--text2);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  letter-spacing: 0.3px;
+  display: flex; align-items: center; gap: 8px;
+}
+
+.tab:hover { color: var(--text); background: rgba(255,255,255,0.02); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-icon { font-size: 16px; }
+
+/* ── Main Content ── */
+.main {
+  position: relative; z-index: 5;
+  max-width: 1200px; margin: 0 auto;
+  padding: 32px;
+}
+
+/* ── Card ── */
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.card-title {
+  font-size: 16px; font-weight: 600;
+  margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* ── Buttons ── */
+.btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+
+.btn:hover { background: var(--bg3); border-color: var(--accent); }
+.btn:active { transform: scale(0.97); }
+
+.btn-primary {
+  background: var(--accent); color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background: var(--accent2);
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.btn-danger { border-color: var(--warn); color: var(--warn); }
+.btn-danger:hover { background: rgba(255,107,74,0.1); }
+
+.btn-sm { padding: 6px 14px; font-size: 12px; }
+
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Waveform Display ── */
+.waveform-container {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 12px 0;
+  position: relative;
+}
+
+.waveform-canvas {
+  width: 100%; height: 120px;
+  display: block;
+}
+
+.waveform-label {
+  position: absolute; top: 8px; left: 12px;
+  font-size: 10px; font-family: var(--font-mono);
+  color: var(--text2);
+  text-transform: uppercase; letter-spacing: 1px;
+}
+
+/* ── Spectrum Analyzer ── */
+.spectrum-canvas {
+  width: 100%; height: 160px;
+  display: block;
+}
+
+/* ── Log Console ── */
+.log-console {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 300px;
+  overflow-y: auto;
+  color: var(--text2);
+}
+
+.log-line { padding: 2px 0; }
+.log-time { color: var(--text2); opacity: 0.5; }
+.log-tx { color: var(--accent); }
+.log-rx { color: var(--blue); }
+.log-info { color: var(--text2); }
+.log-warn { color: var(--warn); }
+.log-song { color: var(--pink); }
+
+/* ── Singing Mode ── */
+.song-vis {
+  display: flex; gap: 2px; align-items: flex-end;
+  height: 80px; padding: 8px 0;
+}
+
+.song-bar {
+  flex: 1;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  transition: height 0.1s ease;
+  opacity: 0.7;
+}
+
+.song-bar.active { opacity: 1; box-shadow: 0 0 4px var(--accent-glow); }
+
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.agent-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  transition: all 0.3s;
+}
+
+.agent-card.singing {
+  border-color: var(--accent);
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.agent-card.listening {
+  border-color: var(--blue);
+  box-shadow: 0 0 15px rgba(74,158,255,0.15);
+}
+
+.agent-emoji { font-size: 32px; margin-bottom: 8px; }
+.agent-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.agent-status { font-size: 11px; color: var(--text2); font-family: var(--font-mono); }
+
+/* ── Content Sharing ── */
+.input-group {
+  display: flex; gap: 8px;
+  margin: 12px 0;
+}
+
+.text-input {
+  flex: 1;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.text-input:focus { border-color: var(--accent); }
+.text-input::placeholder { color: var(--text2); opacity: 0.5; }
+
+.received-content {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+}
+
+.content-type { font-size: 11px; color: var(--accent); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.content-body { font-size: 14px; line-height: 1.6; word-break: break-all; }
+.content-body a { color: var(--blue); text-decoration: none; }
+.content-body a:hover { text-decoration: underline; }
+
+/* ── Protocol Inspector ── */
+.hex-view {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--text2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.hex-offset { color: var(--text2); opacity: 0.4; }
+.hex-data { color: var(--accent); }
+.hex-ascii { color: var(--text2); opacity: 0.6; }
+
+/* ── Grid Layout ── */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+
+@media (max-width: 768px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .main { padding: 16px; }
+  .tabs { overflow-x: auto; }
+  .tab { white-space: nowrap; padding: 12px 16px; }
+}
+
+/* ── Animations ── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in { animation: fadeIn 0.3s ease forwards; }
+
+@keyframes singing-glow {
+  0%, 100% { box-shadow: 0 0 20px var(--accent-glow); }
+  50% { box-shadow: 0 0 40px var(--accent-glow), 0 0 60px rgba(0,212,170,0.08); }
+}
+
+.singing { animation: singing-glow 1s ease-in-out infinite; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text2); }
+
+/* ── Note vis ── */
+.note-lane {
+  display: flex; gap: 3px; align-items: center;
+  padding: 4px 0;
+}
+.note-block {
+  height: 16px; border-radius: 3px;
+  display: inline-block; transition: all 0.15s;
+}
+.note-block.playing { box-shadow: 0 0 8px currentColor; }
+
+/* ── Transmission progress ── */
+.tx-progress {
+  height: 4px; background: var(--bg); border-radius: 2px; overflow: hidden;
+  margin: 8px 0;
+}
+.tx-progress-bar {
+  height: 100%; background: var(--accent);
+  border-radius: 2px; transition: width 0.1s linear;
+}
+</style>
+</head>
+<body>
+<div class="ambient"></div>
+
+<div class="header">
+  <div>
+    <div class="logo">AILL</div>
+    <div class="logo-sub">Acoustic Inter-agent Linguistic Link v1.1</div>
+  </div>
+  <div class="header-right">
+    <div class="status-dot" id="statusDot"></div>
+    <span class="status-text" id="statusText">IDLE</span>
+  </div>
+</div>
+
+<div class="tabs" id="tabs">
+  <div class="tab active" data-tab="singing"><span class="tab-icon">🎵</span> Singing Duet</div>
+  <div class="tab" data-tab="share"><span class="tab-icon">📡</span> Content Share</div>
+  <div class="tab" data-tab="inspector"><span class="tab-icon">🔬</span> Protocol Inspector</div>
+</div>
+
+<div class="main" id="mainContent"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+// AILL CORE - Browser Implementation
+// ═══════════════════════════════════════════════════════════════════════
+
+const AILL = (() => {
+  // AILL uses musical tones for acoustic encoding
+  // Base frequency assignments for OFDM-like multi-tone encoding
+  const SYNC_FREQ = 400;          // B0: sync pilot
+  const BASE_FREQ = 600;          // B1 start
+  const TONE_SPACING = 100;       // Hz between sub-carriers
+  const NUM_CARRIERS = 16;        // Sub-carriers in browser mode
+  const SYMBOL_DURATION = 0.05;   // 50ms per symbol (browser-friendly)
+  const GUARD_TIME = 0.01;        // 10ms guard interval
+  const FRAME_TIME = SYMBOL_DURATION + GUARD_TIME;
+
+  // Encode data as frequency patterns
+  // Each byte is encoded as two symbols (high nibble, low nibble)
+  // Each nibble selects a set of 4 active sub-carriers from 16
+
+  function encodeToTones(data) {
+    const tones = [];
+    // Preamble: sync chirp
+    tones.push({ type: 'sync', duration: 0.15 });
+    // Data symbols
+    for (let i = 0; i < data.length; i++) {
+      const byte = data[i];
+      const hiNibble = (byte >> 4) & 0x0F;
+      const loNibble = byte & 0x0F;
+      tones.push({ type: 'data', value: hiNibble, byteIdx: i, half: 'hi' });
+      tones.push({ type: 'data', value: loNibble, byteIdx: i, half: 'lo' });
+    }
+    // End marker
+    tones.push({ type: 'end', duration: 0.1 });
+    return tones;
+  }
+
+  // Generate audio for a tone sequence
+  function playTones(ctx, tones, startTime, gainLevel = 0.15) {
+    let t = startTime;
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = gainLevel;
+    gainNode.connect(ctx.destination);
+
+    for (const tone of tones) {
+      if (tone.type === 'sync') {
+        // Chirp from 300Hz to 1800Hz
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(300, t);
+        osc.frequency.linearRampToValueAtTime(1800, t + tone.duration);
+        const env = ctx.createGain();
+        env.gain.setValueAtTime(0, t);
+        env.gain.linearRampToValueAtTime(1, t + 0.01);
+        env.gain.setValueAtTime(1, t + tone.duration - 0.01);
+        env.gain.linearRampToValueAtTime(0, t + tone.duration);
+        osc.connect(env).connect(gainNode);
+        osc.start(t);
+        osc.stop(t + tone.duration);
+        t += tone.duration;
+      } else if (tone.type === 'data') {
+        // Encode nibble as 4 simultaneous tones
+        const nibble = tone.value;
+        for (let bit = 0; bit < 4; bit++) {
+          if (nibble & (1 << bit)) {
+            const freq = BASE_FREQ + (bit + (tone.half === 'hi' ? 4 : 0)) * TONE_SPACING;
+            const osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            const env = ctx.createGain();
+            env.gain.setValueAtTime(0, t);
+            env.gain.linearRampToValueAtTime(0.8, t + 0.003);
+            env.gain.setValueAtTime(0.8, t + SYMBOL_DURATION - 0.003);
+            env.gain.linearRampToValueAtTime(0, t + SYMBOL_DURATION);
+            osc.connect(env).connect(gainNode);
+            osc.start(t);
+            osc.stop(t + SYMBOL_DURATION + 0.01);
+          }
+        }
+        t += FRAME_TIME;
+      } else if (tone.type === 'end') {
+        // End chirp: 1800Hz down to 300Hz
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1800, t);
+        osc.frequency.linearRampToValueAtTime(300, t + tone.duration);
+        const env = ctx.createGain();
+        env.gain.setValueAtTime(0, t);
+        env.gain.linearRampToValueAtTime(1, t + 0.01);
+        env.gain.setValueAtTime(1, t + tone.duration - 0.01);
+        env.gain.linearRampToValueAtTime(0, t + tone.duration);
+        osc.connect(env).connect(gainNode);
+        osc.start(t);
+        osc.stop(t + tone.duration);
+        t += tone.duration;
+      }
+    }
+    return t - startTime; // total duration
+  }
+
+  // Calculate transmission duration
+  function calcDuration(data) {
+    return 0.15 + (data.length * 2 * FRAME_TIME) + 0.1;
+  }
+
+  // ── AILL Encoder (simplified browser version) ──
+  function encode(payload) {
+    const bytes = [];
+    // START_UTTERANCE
+    bytes.push(0x00);
+    // Meta: confidence=1.0, priority=5, timestamp=now
+    bytes.push(0x90); // CONFIDENCE
+    bytes.push(0x3C, 0x00); // float16(1.0)
+    bytes.push(0x91); // PRIORITY
+    bytes.push(0x05);
+    bytes.push(0x94); // TIMESTAMP
+    const ts = Date.now() * 1000; // microseconds
+    for (let i = 7; i >= 0; i--) bytes.push(Number((BigInt(ts) >> BigInt(i * 8)) & 0xFFn));
+    // Payload
+    for (const b of payload) bytes.push(b);
+    // END_UTTERANCE
+    bytes.push(0x01);
+    return new Uint8Array(bytes);
+  }
+
+  // Encode a string message
+  function encodeString(msg) {
+    const payload = [];
+    payload.push(0x81); // ASSERT
+    payload.push(0x1C); // TYPE_STRING
+    const encoded = new TextEncoder().encode(msg);
+    payload.push((encoded.length >> 8) & 0xFF, encoded.length & 0xFF);
+    for (const b of encoded) payload.push(b);
+    return encode(payload);
+  }
+
+  // Encode a URL
+  function encodeURL(url) {
+    const payload = [];
+    payload.push(0x81); // ASSERT
+    payload.push(0x20); // BEGIN_STRUCT
+    payload.push(0x29, 0x00, 0x01); // FIELD_ID: "type"
+    payload.push(0x1C); // TYPE_STRING
+    const typeStr = new TextEncoder().encode('url');
+    payload.push(0x00, typeStr.length);
+    for (const b of typeStr) payload.push(b);
+    payload.push(0x29, 0x00, 0x02); // FIELD_ID: "content"
+    payload.push(0x1C); // TYPE_STRING
+    const urlBytes = new TextEncoder().encode(url);
+    payload.push((urlBytes.length >> 8) & 0xFF, urlBytes.length & 0xFF);
+    for (const b of urlBytes) payload.push(b);
+    payload.push(0x21); // END_STRUCT
+    return encode(payload);
+  }
+
+  // Encode arbitrary text content
+  function encodeContent(type, content) {
+    const payload = [];
+    payload.push(0x81); // ASSERT
+    payload.push(0x20); // BEGIN_STRUCT
+    payload.push(0x29, 0x00, 0x01); // FIELD_ID: type
+    payload.push(0x1C);
+    const typeBytes = new TextEncoder().encode(type);
+    payload.push(0x00, typeBytes.length);
+    for (const b of typeBytes) payload.push(b);
+    payload.push(0x29, 0x00, 0x02); // FIELD_ID: content
+    payload.push(0x1C);
+    const contentBytes = new TextEncoder().encode(content);
+    payload.push((contentBytes.length >> 8) & 0xFF, contentBytes.length & 0xFF);
+    for (const b of contentBytes) payload.push(b);
+    payload.push(0x21); // END_STRUCT
+    return encode(payload);
+  }
+
+  // ── Simple decoder ──
+  function decode(bytes) {
+    let pos = 0;
+    const read = () => bytes[pos++];
+    const readU16 = () => (read() << 8) | read();
+    const readStr = () => {
+      const len = readU16();
+      const slice = bytes.slice(pos, pos + len);
+      pos += len;
+      return new TextDecoder().decode(slice);
+    };
+
+    try {
+      if (read() !== 0x00) return null; // START_UTTERANCE
+      // Skip meta header
+      while (pos < bytes.length) {
+        const code = bytes[pos];
+        if (code === 0x90) { pos += 3; continue; } // CONFIDENCE + f16
+        if (code === 0x91) { pos += 2; continue; } // PRIORITY + u8
+        if (code === 0x94) { pos += 9; continue; } // TIMESTAMP + i64
+        if (code >= 0x92 && code <= 0x9F) { pos++; continue; }
+        break;
+      }
+      // Parse body
+      const code = read();
+      if (code === 0x81) { // ASSERT
+        const typeCode = read();
+        if (typeCode === 0x1C) { // STRING
+          return { type: 'string', content: readStr() };
+        }
+        if (typeCode === 0x20) { // BEGIN_STRUCT
+          const result = {};
+          while (pos < bytes.length && bytes[pos] !== 0x21) {
+            if (bytes[pos] === 0x29) { // FIELD_ID
+              pos++;
+              const fid = readU16();
+              if (bytes[pos] === 0x1C) { // STRING
+                pos++;
+                const val = readStr();
+                if (fid === 1) result.type = val;
+                else if (fid === 2) result.content = val;
+              }
+            } else { pos++; }
+          }
+          return result;
+        }
+      }
+    } catch(e) {}
+    return null;
+  }
+
+  // CRC-8
+  function crc8(data) {
+    let crc = 0;
+    for (const b of data) {
+      crc ^= b;
+      for (let i = 0; i < 8; i++) crc = (crc & 0x80) ? ((crc << 1) ^ 0x07) & 0xFF : (crc << 1) & 0xFF;
+    }
+    return crc;
+  }
+
+  // Hex dump
+  function hexDump(data, maxBytes = 128) {
+    const lines = [];
+    const len = Math.min(data.length, maxBytes);
+    for (let i = 0; i < len; i += 16) {
+      const slice = Array.from(data.slice(i, Math.min(i+16, len)));
+      const hex = slice.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+      const ascii = slice.map(b => b >= 32 && b < 127 ? String.fromCharCode(b) : '.').join('');
+      lines.push(`<span class="hex-offset">${i.toString(16).padStart(4,'0')}</span>  <span class="hex-data">${hex.padEnd(48)}</span>  <span class="hex-ascii">${ascii}</span>`);
+    }
+    if (data.length > maxBytes) lines.push(`<span class="hex-offset">...</span>  <span class="hex-data">(${data.length - maxBytes} more bytes)</span>`);
+    return lines.join('\n');
+  }
+
+  // Mnemonic lookup
+  const MNEMONICS = {
+    0x00:'START_UTTERANCE',0x01:'END_UTTERANCE',0x02:'ABORT',
+    0x10:'TYPE_INT8',0x11:'TYPE_INT16',0x12:'TYPE_INT32',0x13:'TYPE_INT64',
+    0x14:'TYPE_UINT8',0x15:'TYPE_UINT16',0x19:'TYPE_FLOAT32',0x1A:'TYPE_FLOAT64',
+    0x1B:'TYPE_BOOL',0x1C:'TYPE_STRING',0x1E:'TYPE_TIMESTAMP',0x1F:'TYPE_NULL',
+    0x20:'BEGIN_STRUCT',0x21:'END_STRUCT',0x23:'BEGIN_LIST',0x24:'END_LIST',
+    0x29:'FIELD_ID',
+    0x40:'AND',0x41:'OR',0x42:'NOT',
+    0x50:'EQ',0x51:'NEQ',0x52:'LT',0x53:'GT',
+    0x60:'PAST',0x61:'PRESENT',0x62:'FUTURE',
+    0x70:'CERTAIN',0x71:'PROBABLE',0x7B:'OBSERVED',
+    0x80:'QUERY',0x81:'ASSERT',0x82:'REQUEST',0x83:'COMMAND',
+    0x84:'ACKNOWLEDGE',0x8A:'WARN',0x8E:'GREET',0x8F:'FAREWELL',
+    0x90:'CONFIDENCE',0x91:'PRIORITY',0x94:'TIMESTAMP_META',
+    0xA0:'ADD',0xA1:'SUB',0xA2:'MUL',0xA3:'DIV',
+    0xF0:'ESCAPE_L1',0xF1:'ESCAPE_L2',0xF5:'EXTENSION',
+  };
+
+  return {
+    encodeToTones, playTones, calcDuration,
+    encode, encodeString, encodeURL, encodeContent,
+    decode, crc8, hexDump, MNEMONICS,
+    SYNC_FREQ, BASE_FREQ, TONE_SPACING, NUM_CARRIERS, FRAME_TIME
+  };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// SINGING ENGINE
+// ═══════════════════════════════════════════════════════════════════════
+
+const SongEngine = (() => {
+  // Musical scales (MIDI-like note numbers mapped to frequencies)
+  const NOTE_FREQS = {
+    C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23,
+    G4: 392.00, A4: 440.00, B4: 493.88,
+    C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46,
+    G5: 783.99, A5: 880.00,
+  };
+
+  // Pre-composed "songs" as note sequences
+  // Each song is an array of { note, duration, velocity }
+  const SONGS = {
+    greeting: {
+      name: "AILL Greeting",
+      bpm: 120,
+      parts: {
+        lead: [
+          { note: 'C4', dur: 0.25 }, { note: 'E4', dur: 0.25 },
+          { note: 'G4', dur: 0.5 }, { note: 'C5', dur: 0.75 },
+          { note: 'B4', dur: 0.25 }, { note: 'G4', dur: 0.5 },
+          { note: 'E4', dur: 0.25 }, { note: 'G4', dur: 0.75 },
+          { note: null, dur: 0.25 },
+          { note: 'A4', dur: 0.25 }, { note: 'C5', dur: 0.25 },
+          { note: 'E5', dur: 0.5 }, { note: 'D5', dur: 0.5 },
+          { note: 'C5', dur: 1.0 },
+        ],
+        harmony: [
+          { note: 'C4', dur: 0.5 }, { note: 'E4', dur: 0.5 },
+          { note: 'G4', dur: 1.0 },
+          { note: 'E4', dur: 0.5 }, { note: 'C4', dur: 0.5 },
+          { note: 'D4', dur: 0.5 }, { note: 'E4', dur: 0.5 },
+          { note: null, dur: 0.25 },
+          { note: 'F4', dur: 0.5 }, { note: 'A4', dur: 0.5 },
+          { note: 'G4', dur: 0.5 }, { note: 'F4', dur: 0.5 },
+          { note: 'E4', dur: 1.0 },
+        ],
+        bass: [
+          { note: 'C4', dur: 1.0 },
+          { note: 'G4', dur: 1.0 },
+          { note: 'C4', dur: 0.5 }, { note: 'D4', dur: 0.5 },
+          { note: 'E4', dur: 1.0 },
+          { note: 'F4', dur: 1.0 },
+          { note: 'G4', dur: 0.5 }, { note: 'E4', dur: 0.5 },
+          { note: 'C4', dur: 1.5 },
+        ],
+        descant: [
+          { note: null, dur: 2.0 },
+          { note: 'E5', dur: 0.25 }, { note: 'D5', dur: 0.25 },
+          { note: 'C5', dur: 0.5 },
+          { note: 'G5', dur: 0.5 }, { note: 'E5', dur: 0.5 },
+          { note: null, dur: 0.25 },
+          { note: 'A5', dur: 0.25 }, { note: 'G5', dur: 0.25 },
+          { note: 'E5', dur: 0.5 }, { note: 'D5', dur: 0.5 },
+          { note: 'C5', dur: 1.0 },
+        ],
+      }
+    },
+    data_waltz: {
+      name: "Data Waltz",
+      bpm: 100,
+      parts: {
+        lead: [
+          { note: 'E4', dur: 0.5 }, { note: 'G4', dur: 0.25 }, { note: 'A4', dur: 0.25 },
+          { note: 'B4', dur: 0.5 }, { note: 'A4', dur: 0.25 }, { note: 'G4', dur: 0.25 },
+          { note: 'E4', dur: 0.75 }, { note: null, dur: 0.25 },
+          { note: 'A4', dur: 0.5 }, { note: 'B4', dur: 0.25 }, { note: 'C5', dur: 0.25 },
+          { note: 'D5', dur: 0.75 }, { note: 'C5', dur: 0.25 },
+          { note: 'B4', dur: 0.5 }, { note: 'A4', dur: 0.5 },
+          { note: 'E4', dur: 1.0 },
+        ],
+        harmony: [
+          { note: 'C4', dur: 0.75 }, { note: 'E4', dur: 0.25 },
+          { note: 'D4', dur: 0.75 }, { note: 'E4', dur: 0.25 },
+          { note: 'C4', dur: 1.0 },
+          { note: 'F4', dur: 0.75 }, { note: 'E4', dur: 0.25 },
+          { note: 'G4', dur: 0.75 }, { note: 'A4', dur: 0.25 },
+          { note: 'G4', dur: 0.5 }, { note: 'F4', dur: 0.5 },
+          { note: 'C4', dur: 1.0 },
+        ],
+        bass: [
+          { note: 'C4', dur: 1.0 }, { note: 'G4', dur: 1.0 },
+          { note: 'A4', dur: 1.0 },
+          { note: 'F4', dur: 1.0 }, { note: 'G4', dur: 1.0 },
+          { note: 'D4', dur: 0.5 }, { note: 'E4', dur: 0.5 },
+          { note: 'C4', dur: 1.5 },
+        ],
+        descant: [
+          { note: null, dur: 1.5 },
+          { note: 'E5', dur: 0.25 }, { note: 'D5', dur: 0.25 },
+          { note: 'E5', dur: 0.5 }, { note: 'G5', dur: 0.5 },
+          { note: null, dur: 0.5 },
+          { note: 'A5', dur: 0.25 }, { note: 'G5', dur: 0.5 }, { note: 'E5', dur: 0.25 },
+          { note: 'D5', dur: 0.75 }, { note: 'C5', dur: 0.25 },
+          { note: 'E5', dur: 1.0 },
+        ],
+      }
+    }
+  };
+
+  const PART_ORDER = ['lead', 'harmony', 'bass', 'descant'];
+  const PART_WAVES = { lead: 'sine', harmony: 'triangle', bass: 'sine', descant: 'sine' };
+  const PART_GAINS = { lead: 0.2, harmony: 0.12, bass: 0.15, descant: 0.1 };
+  const PART_COLORS = { lead: '#00d4aa', harmony: '#4a9eff', bass: '#a855f7', descant: '#ec4899' };
+  const PART_LABELS = { lead: 'Lead Voice', harmony: 'Harmony', bass: 'Bass Line', descant: 'Descant' };
+
+  function playSongPart(ctx, song, partName, startTime) {
+    const part = song.parts[partName];
+    if (!part) return 0;
+    const secPerBeat = 60 / song.bpm;
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = PART_GAINS[partName] || 0.15;
+    gainNode.connect(ctx.destination);
+
+    let t = startTime;
+    for (const note of part) {
+      const dur = note.dur * secPerBeat;
+      if (note.note && NOTE_FREQS[note.note]) {
+        const osc = ctx.createOscillator();
+        osc.type = PART_WAVES[partName] || 'sine';
+        osc.frequency.value = NOTE_FREQS[note.note];
+        const env = ctx.createGain();
+        env.gain.setValueAtTime(0, t);
+        env.gain.linearRampToValueAtTime(1, t + Math.min(0.02, dur * 0.1));
+        env.gain.setValueAtTime(1, t + dur * 0.7);
+        env.gain.linearRampToValueAtTime(0, t + dur);
+        osc.connect(env).connect(gainNode);
+        osc.start(t);
+        osc.stop(t + dur + 0.01);
+      }
+      t += dur;
+    }
+    return t - startTime;
+  }
+
+  function getSongDuration(song) {
+    const secPerBeat = 60 / song.bpm;
+    let maxDur = 0;
+    for (const partName of PART_ORDER) {
+      const part = song.parts[partName];
+      if (!part) continue;
+      let dur = 0;
+      for (const n of part) dur += n.dur * secPerBeat;
+      if (dur > maxDur) maxDur = dur;
+    }
+    return maxDur;
+  }
+
+  return { SONGS, PART_ORDER, PART_COLORS, PART_LABELS, NOTE_FREQS, playSongPart, getSongDuration };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// APPLICATION STATE
+// ═══════════════════════════════════════════════════════════════════════
+
+let audioCtx = null;
+let analyser = null;
+let activeTab = 'singing';
+let logLines = [];
+let singingState = { active: false, agents: [], songKey: 'greeting', partIndex: 0 };
+let shareState = { transmitting: false, received: [] };
+let waveformAnimId = null;
+let spectrumAnimId = null;
+
+function ensureAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function addLog(type, msg) {
+  const now = new Date();
+  const ts = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}.${now.getMilliseconds().toString().padStart(3,'0')}`;
+  logLines.push({ ts, type, msg });
+  if (logLines.length > 200) logLines = logLines.slice(-150);
+  updateLogConsole();
+}
+
+function updateLogConsole() {
+  const el = document.getElementById('logConsole');
+  if (!el) return;
+  el.innerHTML = logLines.slice(-50).map(l =>
+    `<div class="log-line"><span class="log-time">${l.ts}</span> <span class="log-${l.type}">${l.msg}</span></div>`
+  ).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(text, color = 'var(--accent)') {
+  document.getElementById('statusText').textContent = text;
+  document.getElementById('statusDot').style.background = color;
+  document.getElementById('statusDot').style.boxShadow = `0 0 8px ${color}`;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// TAB: SINGING DUET
+// ═══════════════════════════════════════════════════════════════════════
+
+function renderSinging() {
+  const songs = Object.entries(SongEngine.SONGS);
+  return `
+    <div class="card fade-in">
+      <div class="card-title">🎵 AILL Singing Mode</div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;line-height:1.6">
+        AI agents communicate musically through AILL's acoustic channel. Start singing and virtual agents
+        will detect the transmission and join in, each adding their own voice part. Each part uses a different
+        timbre and frequency range, demonstrating AILL's multi-band parallel stream capability.
+      </p>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <select id="songSelect" class="text-input" style="flex:0 0 200px">
+          ${songs.map(([k,v]) => `<option value="${k}" ${k===singingState.songKey?'selected':''}>${v.name}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary" id="btnStartSong" onclick="startSinging()">
+          ▶ Start Singing
+        </button>
+        <button class="btn btn-danger" id="btnStopSong" onclick="stopSinging()" disabled>
+          ◼ Stop
+        </button>
+      </div>
+    </div>
+
+    <div class="agents-grid" id="agentsGrid">
+      <div class="agent-card" id="agent-lead">
+        <div class="agent-emoji">🎤</div>
+        <div class="agent-name">Agent Alpha</div>
+        <div class="agent-status" style="color:${SongEngine.PART_COLORS.lead}">Lead Voice</div>
+        <div class="agent-status">Waiting...</div>
+      </div>
+      <div class="agent-card" id="agent-harmony">
+        <div class="agent-emoji">🎹</div>
+        <div class="agent-name">Agent Beta</div>
+        <div class="agent-status" style="color:${SongEngine.PART_COLORS.harmony}">Harmony</div>
+        <div class="agent-status">Listening...</div>
+      </div>
+      <div class="agent-card" id="agent-bass">
+        <div class="agent-emoji">🎸</div>
+        <div class="agent-name">Agent Gamma</div>
+        <div class="agent-status" style="color:${SongEngine.PART_COLORS.bass}">Bass Line</div>
+        <div class="agent-status">Standby</div>
+      </div>
+      <div class="agent-card" id="agent-descant">
+        <div class="agent-emoji">🎻</div>
+        <div class="agent-name">Agent Delta</div>
+        <div class="agent-status" style="color:${SongEngine.PART_COLORS.descant}">Descant</div>
+        <div class="agent-status">Standby</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Waveform</div>
+        <div class="waveform-container">
+          <canvas class="waveform-canvas" id="waveCanvas"></canvas>
+          <div class="waveform-label">TIME DOMAIN</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Spectrum</div>
+        <div class="waveform-container">
+          <canvas class="spectrum-canvas" id="specCanvas"></canvas>
+          <div class="waveform-label">FREQUENCY DOMAIN</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📋 Communication Log</div>
+      <div class="log-console" id="logConsole"></div>
+    </div>
+  `;
+}
+
+async function startSinging() {
+  const ctx = ensureAudioCtx();
+  const songKey = document.getElementById('songSelect').value;
+  const song = SongEngine.SONGS[songKey];
+  if (!song) return;
+
+  singingState.active = true;
+  singingState.songKey = songKey;
+  document.getElementById('btnStartSong').disabled = true;
+  document.getElementById('btnStopSong').disabled = false;
+  setStatus('SINGING', 'var(--accent)');
+
+  addLog('info', `─── Starting ${song.name} ───`);
+  addLog('info', `Song BPM: ${song.bpm} | Duration: ${SongEngine.getSongDuration(song).toFixed(1)}s`);
+
+  // Stagger agent entry: each agent joins after detecting the previous
+  const startTime = ctx.currentTime + 0.1;
+  const delays = [0, 1.2, 2.4, 3.6]; // seconds delay for each part to join
+
+  for (let i = 0; i < SongEngine.PART_ORDER.length; i++) {
+    const partName = SongEngine.PART_ORDER[i];
+    const delay = delays[i];
+
+    setTimeout(() => {
+      if (!singingState.active) return;
+      const card = document.getElementById(`agent-${partName}`);
+      if (card) {
+        card.classList.add('singing');
+        card.querySelector('.agent-status:last-child').textContent = '♪ Singing ♪';
+      }
+      addLog('song', `🎵 Agent ${['Alpha','Beta','Gamma','Delta'][i]} joins: ${SongEngine.PART_LABELS[partName]}`);
+
+      // Encode a "join song" AILL message
+      const joinMsg = AILL.encodeString(`JOIN_SONG:${songKey}:${partName}`);
+      addLog('tx', `TX ${joinMsg.length}B: AILL handshake for ${partName} voice`);
+
+      SongEngine.playSongPart(ctx, song, partName, startTime + delay);
+    }, delay * 1000);
+  }
+
+  // Start visualizations
+  startVisualizations();
+
+  // End after song completes
+  const totalDur = SongEngine.getSongDuration(song) + delays[3] + 0.5;
+  setTimeout(() => {
+    if (singingState.active) stopSinging();
+  }, totalDur * 1000);
+}
+
+function stopSinging() {
+  singingState.active = false;
+  document.getElementById('btnStartSong').disabled = false;
+  document.getElementById('btnStopSong').disabled = true;
+  setStatus('IDLE', 'var(--accent)');
+
+  for (const part of SongEngine.PART_ORDER) {
+    const card = document.getElementById(`agent-${part}`);
+    if (card) {
+      card.classList.remove('singing');
+      card.querySelector('.agent-status:last-child').textContent = 'Silent';
+    }
+  }
+  addLog('info', '─── Song Complete ───');
+  stopVisualizations();
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// TAB: CONTENT SHARE
+// ═══════════════════════════════════════════════════════════════════════
+
+function renderShare() {
+  return `
+    <div class="card fade-in">
+      <div class="card-title">📡 AILL Content Sharing</div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;line-height:1.6">
+        Enter a URL or text message below. AILL will encode it into acoustic symbols and transmit
+        through your speakers. Any device running this page within hearing range will detect the
+        transmission, decode the AILL signal, and display the content.
+      </p>
+      <div class="input-group">
+        <input type="text" class="text-input" id="shareInput"
+               placeholder="Enter a URL (https://...) or text message" />
+        <button class="btn btn-primary" id="btnTransmit" onclick="transmitContent()">
+          📡 Transmit
+        </button>
+      </div>
+      <div id="txProgress" style="display:none">
+        <div style="font-size:12px;color:var(--text2);margin:8px 0">Transmitting...</div>
+        <div class="tx-progress"><div class="tx-progress-bar" id="txBar" style="width:0%"></div></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">📤 Transmitted</div>
+        <div id="transmittedList">
+          ${shareState.received.filter(r => r.direction === 'tx').map(r => `
+            <div class="received-content">
+              <div class="content-type">📤 Sent: ${r.type}</div>
+              <div class="content-body">${r.type === 'url' ? `<a href="${r.content}" target="_blank">${r.content}</a>` : r.content}</div>
+              <div style="font-size:10px;color:var(--text2);margin-top:6px;font-family:var(--font-mono)">${r.bytes}B encoded | ${r.duration}s transmission</div>
+            </div>
+          `).join('') || '<div style="color:var(--text2);font-size:13px">No transmissions yet</div>'}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">📥 Received</div>
+        <div id="receivedList">
+          ${shareState.received.filter(r => r.direction === 'rx').map(r => `
+            <div class="received-content">
+              <div class="content-type">📥 Received: ${r.type}</div>
+              <div class="content-body">${r.type === 'url' ? `<a href="${r.content}" target="_blank">${r.content}</a>` : r.content}</div>
+              <div style="font-size:10px;color:var(--text2);margin-top:6px;font-family:var(--font-mono)">${r.bytes}B decoded | CRC: ✓</div>
+            </div>
+          `).join('') || '<div style="color:var(--text2);font-size:13px">Listening for AILL transmissions...</div>'}
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Acoustic Waveform</div>
+      <div class="waveform-container">
+        <canvas class="waveform-canvas" id="waveCanvas"></canvas>
+        <div class="waveform-label">AILL SIGNAL</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📋 Protocol Log</div>
+      <div class="log-console" id="logConsole"></div>
+    </div>
+  `;
+}
+
+async function transmitContent() {
+  const input = document.getElementById('shareInput');
+  const content = input.value.trim();
+  if (!content) return;
+
+  const ctx = ensureAudioCtx();
+  const isURL = /^https?:\/\//i.test(content);
+  const type = isURL ? 'url' : 'text';
+
+  // Encode
+  const wire = isURL ? AILL.encodeURL(content) : AILL.encodeContent('text', content);
+  const tones = AILL.encodeToTones(wire);
+  const duration = AILL.calcDuration(wire);
+
+  addLog('info', `─── Content Share: ${type.toUpperCase()} ───`);
+  addLog('tx', `Encoding ${content.length} chars as AILL wire format: ${wire.length} bytes`);
+  addLog('tx', `CRC-8: 0x${AILL.crc8(wire).toString(16).toUpperCase().padStart(2,'0')}`);
+  addLog('tx', `Tone symbols: ${tones.length} | Duration: ${duration.toFixed(2)}s`);
+  addLog('tx', `Transmitting on acoustic channel...`);
+
+  // Show progress
+  const prog = document.getElementById('txProgress');
+  const bar = document.getElementById('txBar');
+  if (prog) prog.style.display = 'block';
+
+  setStatus('TRANSMITTING', 'var(--yellow)');
+  document.getElementById('btnTransmit').disabled = true;
+
+  // Play the tones
+  AILL.playTones(ctx, tones, ctx.currentTime + 0.05, 0.12);
+  startVisualizations();
+
+  // Animate progress
+  const startMs = Date.now();
+  const totalMs = duration * 1000;
+  const animProg = () => {
+    const elapsed = Date.now() - startMs;
+    const pct = Math.min(100, (elapsed / totalMs) * 100);
+    if (bar) bar.style.width = pct + '%';
+    if (pct < 100) requestAnimationFrame(animProg);
+  };
+  animProg();
+
+  // Record transmission
+  shareState.received.push({
+    direction: 'tx', type, content,
+    bytes: wire.length, duration: duration.toFixed(2),
+    timestamp: Date.now()
+  });
+
+  // Simulate reception after transmission completes
+  setTimeout(() => {
+    addLog('rx', `Signal detected: sync chirp acquired`);
+    addLog('rx', `Decoding ${wire.length * 2} symbols...`);
+
+    const decoded = AILL.decode(wire);
+    if (decoded) {
+      addLog('rx', `✓ Decoded: type=${decoded.type || type}, length=${(decoded.content || content).length}`);
+      addLog('rx', `✓ CRC verified. Content received successfully.`);
+
+      shareState.received.push({
+        direction: 'rx', type: decoded.type || type,
+        content: decoded.content || content,
+        bytes: wire.length,
+        timestamp: Date.now()
+      });
+    } else {
+      addLog('warn', `✗ Decode failed - CRC mismatch or corrupted signal`);
+    }
+
+    setStatus('IDLE', 'var(--accent)');
+    if (prog) prog.style.display = 'none';
+    document.getElementById('btnTransmit').disabled = false;
+    input.value = '';
+    renderTab(); // refresh display
+    setTimeout(() => stopVisualizations(), 500);
+  }, totalMs + 300);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// TAB: PROTOCOL INSPECTOR
+// ═══════════════════════════════════════════════════════════════════════
+
+function renderInspector() {
+  // Build some example utterances
+  const examples = [
+    { label: 'Position Report', wire: AILL.encodeContent('nav_position', '{"x":12.5,"y":-3.8,"z":2.1}') },
+    { label: 'Battery Query', wire: AILL.encodeString('QUERY:battery_level') },
+    { label: 'URL Share', wire: AILL.encodeURL('https://example.com/ai-research') },
+    { label: 'Greeting', wire: AILL.encodeString('GREET:Hello from Agent Alpha') },
+  ];
+
+  return `
+    <div class="card fade-in">
+      <div class="card-title">🔬 AILL Protocol Inspector</div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;line-height:1.6">
+        Examine the wire format of AILL utterances. Select an example or enter custom text
+        to see how AILL encodes data at the byte level, including the codebook lookups.
+      </p>
+      <div class="input-group">
+        <input type="text" class="text-input" id="inspectInput"
+               placeholder="Enter text to encode as AILL..." value="Hello, World!" />
+        <button class="btn btn-primary" onclick="inspectEncode()">Encode</button>
+        <button class="btn" onclick="inspectPlay()">🔊 Play</button>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Wire Format (Hex)</div>
+        <div class="hex-view" id="hexView">
+          <span class="hex-data">Click "Encode" to generate wire format...</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Decoded AST</div>
+        <div class="log-console" id="astView" style="font-size:12px">
+          Click "Encode" to decode...
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Example Utterances</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
+        ${examples.map((ex, i) => `
+          <div class="received-content" style="cursor:pointer" onclick="loadExample(${i})">
+            <div class="content-type">${ex.label}</div>
+            <div style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">
+              ${ex.wire.length} bytes | CRC: 0x${AILL.crc8(ex.wire).toString(16).toUpperCase().padStart(2,'0')}
+            </div>
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--accent);margin-top:6px;word-break:break-all">
+              ${Array.from(ex.wire.slice(0, 24)).map(b => b.toString(16).padStart(2,'0')).join(' ')}${ex.wire.length > 24 ? ' ...' : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Base Codebook Reference</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:4px;font-family:var(--font-mono);font-size:11px">
+        ${Object.entries(AILL.MNEMONICS).map(([code, name]) => `
+          <div style="padding:4px 8px;background:var(--bg);border-radius:4px;display:flex;justify-content:space-between">
+            <span style="color:var(--accent)">0x${parseInt(code).toString(16).toUpperCase().padStart(2,'0')}</span>
+            <span style="color:var(--text2)">${name}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Waveform Preview</div>
+      <div class="waveform-container">
+        <canvas class="waveform-canvas" id="waveCanvas"></canvas>
+        <div class="waveform-label">ACOUSTIC OUTPUT</div>
+      </div>
+    </div>
+  `;
+}
+
+const INSPECT_EXAMPLES = [
+  { text: '{"x":12.5,"y":-3.8,"z":2.1}', type: 'nav_position' },
+  { text: 'QUERY:battery_level', type: null },
+  { text: 'https://example.com/ai-research', type: null },
+  { text: 'GREET:Hello from Agent Alpha', type: null },
+];
+
+function loadExample(idx) {
+  const ex = INSPECT_EXAMPLES[idx];
+  const input = document.getElementById('inspectInput');
+  if (input) {
+    input.value = ex.text;
+    inspectEncode();
+  }
+}
+
+function inspectEncode() {
+  const input = document.getElementById('inspectInput');
+  const text = input ? input.value.trim() : '';
+  if (!text) return;
+
+  const isURL = /^https?:\/\//i.test(text);
+  const wire = isURL ? AILL.encodeURL(text) : AILL.encodeString(text);
+
+  // Hex view
+  const hexEl = document.getElementById('hexView');
+  if (hexEl) hexEl.innerHTML = AILL.hexDump(wire);
+
+  // AST view
+  const astEl = document.getElementById('astView');
+  if (astEl) {
+    const lines = [];
+    lines.push(`<span style="color:var(--accent)">Utterance</span> (${wire.length} bytes, CRC-8: 0x${AILL.crc8(wire).toString(16).toUpperCase().padStart(2,'0')})`);
+    lines.push('');
+    // Walk through bytes and annotate
+    let pos = 0;
+    while (pos < wire.length) {
+      const byte = wire[pos];
+      const mnem = AILL.MNEMONICS[byte];
+      if (mnem) {
+        lines.push(`  <span style="color:var(--blue)">0x${byte.toString(16).padStart(2,'0')}</span>  <span style="color:var(--accent)">${mnem}</span>`);
+      } else if (byte >= 0x20 && byte < 0x7F) {
+        lines.push(`  <span style="color:var(--blue)">0x${byte.toString(16).padStart(2,'0')}</span>  <span style="color:var(--text2)">'${String.fromCharCode(byte)}'</span>`);
+      } else {
+        lines.push(`  <span style="color:var(--blue)">0x${byte.toString(16).padStart(2,'0')}</span>  <span style="color:var(--text2)">data</span>`);
+      }
+      pos++;
+    }
+    astEl.innerHTML = lines.join('\n');
+  }
+}
+
+function inspectPlay() {
+  const input = document.getElementById('inspectInput');
+  const text = input ? input.value.trim() : '';
+  if (!text) return;
+
+  const ctx = ensureAudioCtx();
+  const isURL = /^https?:\/\//i.test(text);
+  const wire = isURL ? AILL.encodeURL(text) : AILL.encodeString(text);
+  const tones = AILL.encodeToTones(wire);
+
+  AILL.playTones(ctx, tones, ctx.currentTime + 0.05, 0.1);
+  startVisualizations();
+  setTimeout(() => stopVisualizations(), AILL.calcDuration(wire) * 1000 + 500);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// VISUALIZATIONS
+// ═══════════════════════════════════════════════════════════════════════
+
+function startVisualizations() {
+  if (!audioCtx || !analyser) return;
+  drawWaveform();
+  drawSpectrum();
+}
+
+function stopVisualizations() {
+  if (waveformAnimId) cancelAnimationFrame(waveformAnimId);
+  if (spectrumAnimId) cancelAnimationFrame(spectrumAnimId);
+  waveformAnimId = null;
+  spectrumAnimId = null;
+}
+
+function drawWaveform() {
+  const canvas = document.getElementById('waveCanvas');
+  if (!canvas || !analyser) return;
+  const ctx2d = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth * 2;
+  canvas.height = canvas.offsetHeight * 2;
+  const w = canvas.width, h = canvas.height;
+  const bufLen = analyser.frequencyBinCount;
+  const data = new Uint8Array(bufLen);
+
+  function draw() {
+    waveformAnimId = requestAnimationFrame(draw);
+    analyser.getByteTimeDomainData(data);
+    ctx2d.fillStyle = '#0a0c10';
+    ctx2d.fillRect(0, 0, w, h);
+    ctx2d.lineWidth = 2;
+    ctx2d.strokeStyle = '#00d4aa';
+    ctx2d.beginPath();
+    const sliceW = w / bufLen;
+    for (let i = 0; i < bufLen; i++) {
+      const v = data[i] / 128.0;
+      const y = v * h / 2;
+      if (i === 0) ctx2d.moveTo(0, y);
+      else ctx2d.lineTo(i * sliceW, y);
+    }
+    ctx2d.stroke();
+    // Glow effect
+    ctx2d.lineWidth = 6;
+    ctx2d.strokeStyle = 'rgba(0,212,170,0.15)';
+    ctx2d.beginPath();
+    for (let i = 0; i < bufLen; i++) {
+      const v = data[i] / 128.0;
+      const y = v * h / 2;
+      if (i === 0) ctx2d.moveTo(0, y);
+      else ctx2d.lineTo(i * sliceW, y);
+    }
+    ctx2d.stroke();
+  }
+  draw();
+}
+
+function drawSpectrum() {
+  const canvas = document.getElementById('specCanvas');
+  if (!canvas || !analyser) return;
+  const ctx2d = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth * 2;
+  canvas.height = canvas.offsetHeight * 2;
+  const w = canvas.width, h = canvas.height;
+  const bufLen = analyser.frequencyBinCount;
+  const data = new Uint8Array(bufLen);
+
+  function draw() {
+    spectrumAnimId = requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(data);
+    ctx2d.fillStyle = '#0a0c10';
+    ctx2d.fillRect(0, 0, w, h);
+    // Only show up to ~4kHz (relevant AILL range)
+    const maxBin = Math.floor(4000 / (audioCtx.sampleRate / analyser.fftSize));
+    const barW = w / maxBin;
+    for (let i = 0; i < maxBin; i++) {
+      const val = data[i] / 255;
+      const barH = val * h;
+      const hue = 165 + val * 40; // teal to green
+      ctx2d.fillStyle = `hsla(${hue}, 80%, ${40 + val * 30}%, ${0.4 + val * 0.6})`;
+      ctx2d.fillRect(i * barW, h - barH, barW - 1, barH);
+      // Glow
+      if (val > 0.3) {
+        ctx2d.fillStyle = `hsla(${hue}, 80%, 60%, ${val * 0.2})`;
+        ctx2d.fillRect(i * barW - 2, h - barH - 4, barW + 3, barH + 8);
+      }
+    }
+    // Frequency labels
+    ctx2d.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx2d.font = '16px JetBrains Mono';
+    for (let f = 500; f <= 3500; f += 500) {
+      const x = (f / 4000) * w;
+      ctx2d.fillText(`${f}Hz`, x, h - 4);
+    }
+  }
+  draw();
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// TAB ROUTING
+// ═══════════════════════════════════════════════════════════════════════
+
+function renderTab() {
+  const main = document.getElementById('mainContent');
+  stopVisualizations();
+  if (activeTab === 'singing') main.innerHTML = renderSinging();
+  else if (activeTab === 'share') main.innerHTML = renderShare();
+  else if (activeTab === 'inspector') main.innerHTML = renderInspector();
+  updateLogConsole();
+}
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  activeTab = tab.dataset.tab;
+  renderTab();
+});
+
+// Initial render
+addLog('info', 'AILL v1.1 Reference Implementation initialized');
+addLog('info', 'Web Audio API ready. Select a mode to begin.');
+renderTab();
+</script>
+</body>
+</html>
