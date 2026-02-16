@@ -11,7 +11,8 @@ from aill import (
     AILLEncoder, AILLDecoder, pretty_print,
     FrameControl, TypeMarker, Structure, Pragmatic, Meta, Modality,
     Temporal, Arithmetic, Escape, Relational, Logic, Quantifier,
-    BASE_CODEBOOK, NAV1, DIAG1, DOMAIN_REGISTRY, crc8,
+    BASE_CODEBOOK, NAV1, PERCEPT1, MANIP1, COMM1, DIAG1, PLAN1, SAFETY1,
+    DOMAIN_REGISTRY, crc8,
 )
 from aill.encoder import encode_float16, decode_float16, encode_varint, decode_varint, ByteStream, EpochBuilder
 from aill.decoder import AILLDecodeError, decode_epoch
@@ -454,6 +455,29 @@ def main():
     run_test("TG-CD-002", "NAV-1 domain codebook", tg_cd_002)
     run_test("TG-CD-003", "DIAG-1 domain codebook", tg_cd_003)
 
+    print("\n  TG-DOMAIN: Full Domain Codebook Validation")
+    print("  " + "─" * 56)
+    run_test("TG-DOM-001", "MANIP-1 codebook loaded",      lambda: MANIP1.lookup(0x0000) is not None and MANIP1.lookup(0x0000).mnemonic == "GRIPPER_STATE")
+    run_test("TG-DOM-002", "COMM-1 codebook loaded",       lambda: COMM1.lookup(0x0000) is not None and COMM1.lookup(0x0000).mnemonic == "AGENT_UUID")
+    run_test("TG-DOM-003", "SAFETY-1 codebook loaded",     lambda: SAFETY1.lookup(0x0000) is not None and SAFETY1.lookup(0x0000).mnemonic == "EMERGENCY_LEVEL")
+    run_test("TG-DOM-004", "PLAN-1 expanded (negotiation)", lambda: PLAN1.lookup(0x0020) is not None and PLAN1.lookup(0x0020).mnemonic == "OFFER")
+    run_test("TG-DOM-005", "NAV-1 expanded (mapping)",     lambda: NAV1.lookup(0x00C0) is not None and NAV1.lookup(0x00C0).mnemonic == "MAP_ORIGIN")
+    run_test("TG-DOM-006", "NAV-1 expanded (multi-agent)", lambda: NAV1.lookup(0x0110) is not None and NAV1.lookup(0x0110).mnemonic == "SWARM_CENTER")
+    run_test("TG-DOM-007", "PERCEPT-1 expanded (scene)",   lambda: PERCEPT1.lookup(0x0090) is not None and PERCEPT1.lookup(0x0090).mnemonic == "SCENE_GRAPH")
+    run_test("TG-DOM-008", "PERCEPT-1 expanded (audio)",   lambda: PERCEPT1.lookup(0x00D0) is not None and PERCEPT1.lookup(0x00D0).mnemonic == "SOUND_EVENT")
+    run_test("TG-DOM-009", "PERCEPT-1 expanded (tactile)", lambda: PERCEPT1.lookup(0x00E0) is not None and PERCEPT1.lookup(0x00E0).mnemonic == "CONTACT_DETECTED")
+    run_test("TG-DOM-010", "DIAG-1 expanded (thermal)",    lambda: DIAG1.lookup(0x0080) is not None and DIAG1.lookup(0x0080).mnemonic == "THERMAL_MAP")
+    run_test("TG-DOM-011", "DIAG-1 expanded (software)",   lambda: DIAG1.lookup(0x00B0) is not None and DIAG1.lookup(0x00B0).mnemonic == "PROCESS_LIST")
+    run_test("TG-DOM-012", "MANIP-1 grasp planning",       lambda: MANIP1.lookup(0x0060) is not None and MANIP1.lookup(0x0060).mnemonic == "GRASP_POSE")
+    run_test("TG-DOM-013", "MANIP-1 manipulation actions",  lambda: MANIP1.lookup(0x0080) is not None and MANIP1.lookup(0x0080).mnemonic == "PICK")
+    run_test("TG-DOM-014", "COMM-1 routing",               lambda: COMM1.lookup(0x0020) is not None and COMM1.lookup(0x0020).mnemonic == "UNICAST")
+    run_test("TG-DOM-015", "COMM-1 data sync",             lambda: COMM1.lookup(0x0080) is not None and COMM1.lookup(0x0080).mnemonic == "SYNC_REQUEST")
+    run_test("TG-DOM-016", "SAFETY-1 human safety",        lambda: SAFETY1.lookup(0x0020) is not None and SAFETY1.lookup(0x0020).mnemonic == "HUMAN_DETECTED")
+    run_test("TG-DOM-017", "SAFETY-1 fault handling",      lambda: SAFETY1.lookup(0x0040) is not None and SAFETY1.lookup(0x0040).mnemonic == "FAULT_DETECTED")
+    run_test("TG-DOM-018", "SAFETY-1 geofence/regulatory", lambda: SAFETY1.lookup(0x0060) is not None and SAFETY1.lookup(0x0060).mnemonic == "GEOFENCE_BREACH")
+    run_test("TG-DOM-019", "7 codebooks in registry",      lambda: len(DOMAIN_REGISTRY) == 7)
+    run_test("TG-DOM-020", "Total domain entries >= 550",   lambda: sum(len(cb) for cb in DOMAIN_REGISTRY.values()) >= 550)
+
     print("\n  TG-ERR: Error Handling")
     print("  " + "─" * 56)
     run_test("TG-ER-001", "Missing START_UTTERANCE", tg_er_001)
@@ -515,6 +539,26 @@ _ALL_TESTS = [
     ("TG-CD-001", "All 256 base entries", tg_cd_001),
     ("TG-CD-002", "NAV-1 codebook", tg_cd_002),
     ("TG-CD-003", "DIAG-1 codebook", tg_cd_003),
+    ("TG-DOM-001", "MANIP-1 codebook loaded", lambda: MANIP1.lookup(0x0000) is not None and MANIP1.lookup(0x0000).mnemonic == "GRIPPER_STATE"),
+    ("TG-DOM-002", "COMM-1 codebook loaded", lambda: COMM1.lookup(0x0000) is not None and COMM1.lookup(0x0000).mnemonic == "AGENT_UUID"),
+    ("TG-DOM-003", "SAFETY-1 codebook loaded", lambda: SAFETY1.lookup(0x0000) is not None and SAFETY1.lookup(0x0000).mnemonic == "EMERGENCY_LEVEL"),
+    ("TG-DOM-004", "PLAN-1 expanded (negotiation)", lambda: PLAN1.lookup(0x0020) is not None and PLAN1.lookup(0x0020).mnemonic == "OFFER"),
+    ("TG-DOM-005", "NAV-1 expanded (mapping)", lambda: NAV1.lookup(0x00C0) is not None and NAV1.lookup(0x00C0).mnemonic == "MAP_ORIGIN"),
+    ("TG-DOM-006", "NAV-1 expanded (multi-agent)", lambda: NAV1.lookup(0x0110) is not None and NAV1.lookup(0x0110).mnemonic == "SWARM_CENTER"),
+    ("TG-DOM-007", "PERCEPT-1 expanded (scene)", lambda: PERCEPT1.lookup(0x0090) is not None and PERCEPT1.lookup(0x0090).mnemonic == "SCENE_GRAPH"),
+    ("TG-DOM-008", "PERCEPT-1 expanded (audio)", lambda: PERCEPT1.lookup(0x00D0) is not None and PERCEPT1.lookup(0x00D0).mnemonic == "SOUND_EVENT"),
+    ("TG-DOM-009", "PERCEPT-1 expanded (tactile)", lambda: PERCEPT1.lookup(0x00E0) is not None and PERCEPT1.lookup(0x00E0).mnemonic == "CONTACT_DETECTED"),
+    ("TG-DOM-010", "DIAG-1 expanded (thermal)", lambda: DIAG1.lookup(0x0080) is not None and DIAG1.lookup(0x0080).mnemonic == "THERMAL_MAP"),
+    ("TG-DOM-011", "DIAG-1 expanded (software)", lambda: DIAG1.lookup(0x00B0) is not None and DIAG1.lookup(0x00B0).mnemonic == "PROCESS_LIST"),
+    ("TG-DOM-012", "MANIP-1 grasp planning", lambda: MANIP1.lookup(0x0060) is not None and MANIP1.lookup(0x0060).mnemonic == "GRASP_POSE"),
+    ("TG-DOM-013", "MANIP-1 manipulation actions", lambda: MANIP1.lookup(0x0080) is not None and MANIP1.lookup(0x0080).mnemonic == "PICK"),
+    ("TG-DOM-014", "COMM-1 routing", lambda: COMM1.lookup(0x0020) is not None and COMM1.lookup(0x0020).mnemonic == "UNICAST"),
+    ("TG-DOM-015", "COMM-1 data sync", lambda: COMM1.lookup(0x0080) is not None and COMM1.lookup(0x0080).mnemonic == "SYNC_REQUEST"),
+    ("TG-DOM-016", "SAFETY-1 human safety", lambda: SAFETY1.lookup(0x0020) is not None and SAFETY1.lookup(0x0020).mnemonic == "HUMAN_DETECTED"),
+    ("TG-DOM-017", "SAFETY-1 fault handling", lambda: SAFETY1.lookup(0x0040) is not None and SAFETY1.lookup(0x0040).mnemonic == "FAULT_DETECTED"),
+    ("TG-DOM-018", "SAFETY-1 geofence/regulatory", lambda: SAFETY1.lookup(0x0060) is not None and SAFETY1.lookup(0x0060).mnemonic == "GEOFENCE_BREACH"),
+    ("TG-DOM-019", "7 codebooks in registry", lambda: len(DOMAIN_REGISTRY) == 7),
+    ("TG-DOM-020", "Total domain entries >= 550", lambda: sum(len(cb) for cb in DOMAIN_REGISTRY.values()) >= 550),
     ("TG-ER-001", "Missing START_UTTERANCE", tg_er_001),
     ("TG-ER-002", "Truncated data", tg_er_002),
     ("TG-ER-003", "Insufficient epoch data", tg_er_003),
