@@ -20,7 +20,7 @@ passed = 0
 failed = 0
 errors = 0
 
-def test(test_id, description, func):
+def run_test(test_id, description, func):
     global passed, failed, errors
     try:
         result = func()
@@ -403,62 +403,62 @@ def main():
 
     print("  TG-TYPES: Type System")
     print("  " + "─" * 56)
-    test("TG-TY-001", "INT8 round-trip (boundary values)", tg_ty_001)
-    test("TG-TY-002", "INT32 round-trip (boundary values)", tg_ty_002)
-    test("TG-TY-003", "FLOAT32 including special values", tg_ty_003)
-    test("TG-TY-004", "FLOAT16 encode/decode", tg_ty_004)
-    test("TG-TY-005", "STRING with UTF-8 (incl emoji)", tg_ty_005)
-    test("TG-TY-006", "Empty string", tg_ty_006)
-    test("TG-TY-007", "BOOL true/false", tg_ty_007)
-    test("TG-TY-008", "NULL type", tg_ty_008)
-    test("TG-TY-009", "TIMESTAMP int64", tg_ty_009)
-    test("TG-TY-010", "UINT16 and UINT32", tg_ty_010)
+    run_test("TG-TY-001", "INT8 round-trip (boundary values)", tg_ty_001)
+    run_test("TG-TY-002", "INT32 round-trip (boundary values)", tg_ty_002)
+    run_test("TG-TY-003", "FLOAT32 including special values", tg_ty_003)
+    run_test("TG-TY-004", "FLOAT16 encode/decode", tg_ty_004)
+    run_test("TG-TY-005", "STRING with UTF-8 (incl emoji)", tg_ty_005)
+    run_test("TG-TY-006", "Empty string", tg_ty_006)
+    run_test("TG-TY-007", "BOOL true/false", tg_ty_007)
+    run_test("TG-TY-008", "NULL type", tg_ty_008)
+    run_test("TG-TY-009", "TIMESTAMP int64", tg_ty_009)
+    run_test("TG-TY-010", "UINT16 and UINT32", tg_ty_010)
 
     print("\n  TG-STRUCT: Structure Types")
     print("  " + "─" * 56)
-    test("TG-ST-001", "Simple struct with fields", tg_st_001)
-    test("TG-ST-002", "List of float32", tg_st_002)
-    test("TG-ST-003", "Nested struct inside list", tg_st_003)
-    test("TG-ST-004", "Map with key-value pairs", tg_st_004)
+    run_test("TG-ST-001", "Simple struct with fields", tg_st_001)
+    run_test("TG-ST-002", "List of float32", tg_st_002)
+    run_test("TG-ST-003", "Nested struct inside list", tg_st_003)
+    run_test("TG-ST-004", "Map with key-value pairs", tg_st_004)
 
     print("\n  TG-EXPR: Expression Parsing")
     print("  " + "─" * 56)
-    test("TG-EX-001", "ASSERT wraps expression", tg_ex_001)
-    test("TG-EX-002", "QUERY pragmatic act", tg_ex_002)
-    test("TG-EX-003", "OBSERVED modality", tg_ex_003)
-    test("TG-EX-004", "PREDICTED with horizon", tg_ex_004)
-    test("TG-EX-005", "PAST temporal modifier", tg_ex_005)
-    test("TG-EX-006", "L1 domain reference", tg_ex_006)
+    run_test("TG-EX-001", "ASSERT wraps expression", tg_ex_001)
+    run_test("TG-EX-002", "QUERY pragmatic act", tg_ex_002)
+    run_test("TG-EX-003", "OBSERVED modality", tg_ex_003)
+    run_test("TG-EX-004", "PREDICTED with horizon", tg_ex_004)
+    run_test("TG-EX-005", "PAST temporal modifier", tg_ex_005)
+    run_test("TG-EX-006", "L1 domain reference", tg_ex_006)
 
     print("\n  TG-META: Meta Header")
     print("  " + "─" * 56)
-    test("TG-MT-001", "Confidence/priority/timestamp", tg_mt_001)
-    test("TG-MT-002", "Dest agent and seqnum", tg_mt_002)
+    run_test("TG-MT-001", "Confidence/priority/timestamp", tg_mt_001)
+    run_test("TG-MT-002", "Dest agent and seqnum", tg_mt_002)
 
     print("\n  TG-CRC: CRC and Epoch Integrity")
     print("  " + "─" * 56)
-    test("TG-CRC-001", "CRC-8 empty vector", tg_crc_001)
-    test("TG-CRC-002", "CRC-8 standard test vector", tg_crc_002)
-    test("TG-CRC-003", "Epoch encode/decode with CRC", tg_crc_003)
-    test("TG-CRC-004", "Epoch CRC failure detection", tg_crc_004)
+    run_test("TG-CRC-001", "CRC-8 empty vector", tg_crc_001)
+    run_test("TG-CRC-002", "CRC-8 standard test vector", tg_crc_002)
+    run_test("TG-CRC-003", "Epoch encode/decode with CRC", tg_crc_003)
+    run_test("TG-CRC-004", "Epoch CRC failure detection", tg_crc_004)
 
     print("\n  TG-VARINT: Variable-Length Integers")
     print("  " + "─" * 56)
-    test("TG-VI-001", "1-byte values (0-127)", tg_vi_001)
-    test("TG-VI-002", "2-byte values (128-16383)", tg_vi_002)
-    test("TG-VI-003", "Large values (16K+)", tg_vi_003)
+    run_test("TG-VI-001", "1-byte values (0-127)", tg_vi_001)
+    run_test("TG-VI-002", "2-byte values (128-16383)", tg_vi_002)
+    run_test("TG-VI-003", "Large values (16K+)", tg_vi_003)
 
     print("\n  TG-CODEC: Codebook")
     print("  " + "─" * 56)
-    test("TG-CD-001", "All 256 base codebook entries", tg_cd_001)
-    test("TG-CD-002", "NAV-1 domain codebook", tg_cd_002)
-    test("TG-CD-003", "DIAG-1 domain codebook", tg_cd_003)
+    run_test("TG-CD-001", "All 256 base codebook entries", tg_cd_001)
+    run_test("TG-CD-002", "NAV-1 domain codebook", tg_cd_002)
+    run_test("TG-CD-003", "DIAG-1 domain codebook", tg_cd_003)
 
     print("\n  TG-ERR: Error Handling")
     print("  " + "─" * 56)
-    test("TG-ER-001", "Missing START_UTTERANCE", tg_er_001)
-    test("TG-ER-002", "Truncated data", tg_er_002)
-    test("TG-ER-003", "Insufficient epoch data", tg_er_003)
+    run_test("TG-ER-001", "Missing START_UTTERANCE", tg_er_001)
+    run_test("TG-ER-002", "Truncated data", tg_er_002)
+    run_test("TG-ER-003", "Insufficient epoch data", tg_er_003)
 
     # Summary
     total = passed + failed + errors
@@ -475,3 +475,51 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pytest-compatible wrappers
+# ═══════════════════════════════════════════════════════════════════════
+
+import pytest
+
+_ALL_TESTS = [
+    ("TG-TY-001", "INT8 round-trip", tg_ty_001),
+    ("TG-TY-002", "INT32 round-trip", tg_ty_002),
+    ("TG-TY-003", "FLOAT32 special values", tg_ty_003),
+    ("TG-TY-004", "FLOAT16 encode/decode", tg_ty_004),
+    ("TG-TY-005", "STRING UTF-8", tg_ty_005),
+    ("TG-TY-006", "Empty string", tg_ty_006),
+    ("TG-TY-007", "BOOL", tg_ty_007),
+    ("TG-TY-008", "NULL", tg_ty_008),
+    ("TG-TY-009", "TIMESTAMP", tg_ty_009),
+    ("TG-TY-010", "UINT16/UINT32", tg_ty_010),
+    ("TG-ST-001", "Simple struct", tg_st_001),
+    ("TG-ST-002", "List of float32", tg_st_002),
+    ("TG-ST-003", "Nested struct in list", tg_st_003),
+    ("TG-ST-004", "Map", tg_st_004),
+    ("TG-EX-001", "ASSERT wraps expression", tg_ex_001),
+    ("TG-EX-002", "QUERY", tg_ex_002),
+    ("TG-EX-003", "OBSERVED modality", tg_ex_003),
+    ("TG-EX-004", "PREDICTED with horizon", tg_ex_004),
+    ("TG-EX-005", "PAST temporal", tg_ex_005),
+    ("TG-EX-006", "L1 domain reference", tg_ex_006),
+    ("TG-MT-001", "Confidence/priority/timestamp", tg_mt_001),
+    ("TG-MT-002", "Dest agent and seqnum", tg_mt_002),
+    ("TG-CRC-001", "CRC-8 empty vector", tg_crc_001),
+    ("TG-CRC-002", "CRC-8 standard vector", tg_crc_002),
+    ("TG-CRC-003", "Epoch roundtrip", tg_crc_003),
+    ("TG-CRC-004", "Epoch CRC failure", tg_crc_004),
+    ("TG-VI-001", "VarInt 1-byte", tg_vi_001),
+    ("TG-VI-002", "VarInt 2-byte", tg_vi_002),
+    ("TG-VI-003", "VarInt large", tg_vi_003),
+    ("TG-CD-001", "All 256 base entries", tg_cd_001),
+    ("TG-CD-002", "NAV-1 codebook", tg_cd_002),
+    ("TG-CD-003", "DIAG-1 codebook", tg_cd_003),
+    ("TG-ER-001", "Missing START_UTTERANCE", tg_er_001),
+    ("TG-ER-002", "Truncated data", tg_er_002),
+    ("TG-ER-003", "Insufficient epoch data", tg_er_003),
+]
+
+@pytest.mark.parametrize("test_id,description,func", _ALL_TESTS, ids=[t[0] for t in _ALL_TESTS])
+def test_conformance(test_id, description, func):
+    assert func(), f"{test_id}: {description}"

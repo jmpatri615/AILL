@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.pyo
 .claude/
+
+# Rust build artifacts
+reference-rust/target/

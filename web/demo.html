@@ -218,22 +218,7 @@ body {
 .log-warn { color: var(--warn); }
 .log-song { color: var(--pink); }
 
-/* ── Singing Mode ── */
-.song-vis {
-  display: flex; gap: 2px; align-items: flex-end;
-  height: 80px; padding: 8px 0;
-}
-
-.song-bar {
-  flex: 1;
-  background: var(--accent);
-  border-radius: 2px 2px 0 0;
-  min-height: 2px;
-  transition: height 0.1s ease;
-  opacity: 0.7;
-}
-
-.song-bar.active { opacity: 1; box-shadow: 0 0 4px var(--accent-glow); }
+/* ── Negotiation Mode ── */
 
 .agents-grid {
   display: grid;
@@ -352,16 +337,6 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text2); }
 
-/* ── Note vis ── */
-.note-lane {
-  display: flex; gap: 3px; align-items: center;
-  padding: 4px 0;
-}
-.note-block {
-  height: 16px; border-radius: 3px;
-  display: inline-block; transition: all 0.15s;
-}
-.note-block.playing { box-shadow: 0 0 8px currentColor; }
 
 /* ── Transmission progress ── */
 .tx-progress {
@@ -726,10 +701,90 @@ const AILL = (() => {
     0xF0:'ESCAPE_L1',0xF1:'ESCAPE_L2',0xF5:'EXTENSION',
   };
 
+  // ── Pragmatic encoder (JS fallback for negotiation without WASM) ──
+  function encodePragmatic(act, topicId, content, agentIdArr) {
+    const bytes = [];
+    bytes.push(0x00); // START_UTTERANCE
+    // SOURCE_AGENT meta
+    bytes.push(0x92);
+    for (let i = 0; i < 16; i++) bytes.push(agentIdArr[i] || 0);
+    // TOPIC meta
+    bytes.push(0x97);
+    bytes.push((topicId >> 8) & 0xFF, topicId & 0xFF);
+    // Pragmatic act
+    bytes.push(act);
+    // Content string
+    bytes.push(0x1C); // TYPE_STRING
+    const encoded = new TextEncoder().encode(content);
+    bytes.push((encoded.length >> 8) & 0xFF, encoded.length & 0xFF);
+    for (const b of encoded) bytes.push(b);
+    // END_UTTERANCE
+    bytes.push(0x01);
+    return new Uint8Array(bytes);
+  }
+
+  // ── Pragmatic decoder (JS fallback for negotiation without WASM) ──
+  function decodePragmatic(bytes) {
+    let pos = 0;
+    const read = () => bytes[pos++];
+    if (read() !== 0x00) return null; // START_UTTERANCE
+
+    let agentHex = '';
+    let topicId = 0;
+
+    // Parse meta headers
+    while (pos < bytes.length) {
+      const code = bytes[pos];
+      if (code === 0x90) { pos += 3; }        // CONFIDENCE + f16
+      else if (code === 0x91) { pos += 2; }   // PRIORITY + u8
+      else if (code === 0x94) { pos += 9; }   // TIMESTAMP + i64
+      else if (code === 0x92) {                // SOURCE_AGENT + 16 bytes
+        pos++;
+        if (pos + 16 > bytes.length) return null;
+        agentHex = Array.from(bytes.slice(pos, pos + 16)).map(b => b.toString(16).padStart(2, '0')).join('');
+        pos += 16;
+      } else if (code === 0x93) { pos += 17; } // DEST_AGENT + 16 bytes
+      else if (code === 0x95) { pos += 5; }    // SEQNUM + u32
+      else if (code === 0x97) {                 // TOPIC + u16
+        pos++;
+        if (pos + 2 > bytes.length) return null;
+        topicId = (bytes[pos] << 8) | bytes[pos + 1];
+        pos += 2;
+      } else if (code >= 0x96 && code <= 0x9F) { pos++; }
+      else break;
+    }
+
+    if (pos >= bytes.length) return null;
+
+    // Read pragmatic act
+    const actCode = bytes[pos++];
+    const actNames = { 0x80:'QUERY', 0x81:'ASSERT', 0x82:'REQUEST', 0x83:'COMMAND',
+      0x84:'ACKNOWLEDGE', 0x85:'REJECT', 0x88:'PROPOSE', 0x89:'ACCEPT',
+      0x8A:'WARN', 0x8E:'GREET', 0x8F:'FAREWELL' };
+    const act = actNames[actCode];
+    if (!act) return null;
+
+    // Read content string
+    let content = '';
+    if (pos < bytes.length && bytes[pos] === 0x1C) {
+      pos++;
+      if (pos + 2 <= bytes.length) {
+        const len = (bytes[pos] << 8) | bytes[pos + 1];
+        pos += 2;
+        if (pos + len <= bytes.length) {
+          content = new TextDecoder().decode(bytes.slice(pos, pos + len));
+        }
+      }
+    }
+
+    return { act, topic: topicId, content, agent: agentHex };
+  }
+
   return {
     encodeToTones, playTones, calcDuration,
     encode, encodeString, encodeURL, encodeContent,
     decode, crc8, hexDump, MNEMONICS,
+    encodePragmatic, decodePragmatic,
     SYNC_FREQ, BASE_FREQ, TONE_SPACING, NUM_CARRIERS, FRAME_TIME
   };
 })();
@@ -1043,157 +1098,55 @@ const AILLBroadcast = (() => {
 
 
 // ═══════════════════════════════════════════════════════════════════════
-// SINGING ENGINE
+// CONVERSATION CATALOG — Topics and roles for AILL negotiation
+// All "performance" is pure AILL wire-format tones — no musical notes.
 // ═══════════════════════════════════════════════════════════════════════
 
-const SongEngine = (() => {
-  // Musical scales (MIDI-like note numbers mapped to frequencies)
-  const NOTE_FREQS = {
-    C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23,
-    G4: 392.00, A4: 440.00, B4: 493.88,
-    C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46,
-    G5: 783.99, A5: 880.00,
-  };
-
-  // Pre-composed "songs" as note sequences
-  // Each song is an array of { note, duration, velocity }
-  const SONGS = {
-    greeting: {
-      name: "AILL Greeting",
-      bpm: 120,
-      parts: {
-        lead: [
-          { note: 'C4', dur: 0.25 }, { note: 'E4', dur: 0.25 },
-          { note: 'G4', dur: 0.5 }, { note: 'C5', dur: 0.75 },
-          { note: 'B4', dur: 0.25 }, { note: 'G4', dur: 0.5 },
-          { note: 'E4', dur: 0.25 }, { note: 'G4', dur: 0.75 },
-          { note: null, dur: 0.25 },
-          { note: 'A4', dur: 0.25 }, { note: 'C5', dur: 0.25 },
-          { note: 'E5', dur: 0.5 }, { note: 'D5', dur: 0.5 },
-          { note: 'C5', dur: 1.0 },
-        ],
-        harmony: [
-          { note: 'C4', dur: 0.5 }, { note: 'E4', dur: 0.5 },
-          { note: 'G4', dur: 1.0 },
-          { note: 'E4', dur: 0.5 }, { note: 'C4', dur: 0.5 },
-          { note: 'D4', dur: 0.5 }, { note: 'E4', dur: 0.5 },
-          { note: null, dur: 0.25 },
-          { note: 'F4', dur: 0.5 }, { note: 'A4', dur: 0.5 },
-          { note: 'G4', dur: 0.5 }, { note: 'F4', dur: 0.5 },
-          { note: 'E4', dur: 1.0 },
-        ],
-        bass: [
-          { note: 'C4', dur: 1.0 },
-          { note: 'G4', dur: 1.0 },
-          { note: 'C4', dur: 0.5 }, { note: 'D4', dur: 0.5 },
-          { note: 'E4', dur: 1.0 },
-          { note: 'F4', dur: 1.0 },
-          { note: 'G4', dur: 0.5 }, { note: 'E4', dur: 0.5 },
-          { note: 'C4', dur: 1.5 },
-        ],
-        descant: [
-          { note: null, dur: 2.0 },
-          { note: 'E5', dur: 0.25 }, { note: 'D5', dur: 0.25 },
-          { note: 'C5', dur: 0.5 },
-          { note: 'G5', dur: 0.5 }, { note: 'E5', dur: 0.5 },
-          { note: null, dur: 0.25 },
-          { note: 'A5', dur: 0.25 }, { note: 'G5', dur: 0.25 },
-          { note: 'E5', dur: 0.5 }, { note: 'D5', dur: 0.5 },
-          { note: 'C5', dur: 1.0 },
-        ],
-      }
+const Conversations = (() => {
+  // Topics agents can negotiate about. Each defines roles that
+  // periodically transmit different AILL data messages as acoustic tones.
+  const TOPICS = {
+    status_exchange: {
+      name: "Status Exchange",
+      duration: 15,  // seconds
+      roles: ['coordinator', 'sensor', 'actuator', 'observer'],
+      // Each role's message generator (returns AILL-encodable content string)
+      messages: {
+        coordinator: (seq) => `cmd:report_status seq=${seq}`,
+        sensor:      (seq) => `sensor:temp=${(20 + Math.random()*10).toFixed(1)} humidity=${(40 + Math.random()*30).toFixed(0)} seq=${seq}`,
+        actuator:    (seq) => `actuator:motor_rpm=${(1000 + Math.random()*500).toFixed(0)} state=active seq=${seq}`,
+        observer:    (seq) => `log:peers=${Math.floor(1+Math.random()*3)} uptime=${seq*2}s`,
+      },
     },
-    data_waltz: {
-      name: "Data Waltz",
-      bpm: 100,
-      parts: {
-        lead: [
-          { note: 'E4', dur: 0.5 }, { note: 'G4', dur: 0.25 }, { note: 'A4', dur: 0.25 },
-          { note: 'B4', dur: 0.5 }, { note: 'A4', dur: 0.25 }, { note: 'G4', dur: 0.25 },
-          { note: 'E4', dur: 0.75 }, { note: null, dur: 0.25 },
-          { note: 'A4', dur: 0.5 }, { note: 'B4', dur: 0.25 }, { note: 'C5', dur: 0.25 },
-          { note: 'D5', dur: 0.75 }, { note: 'C5', dur: 0.25 },
-          { note: 'B4', dur: 0.5 }, { note: 'A4', dur: 0.5 },
-          { note: 'E4', dur: 1.0 },
-        ],
-        harmony: [
-          { note: 'C4', dur: 0.75 }, { note: 'E4', dur: 0.25 },
-          { note: 'D4', dur: 0.75 }, { note: 'E4', dur: 0.25 },
-          { note: 'C4', dur: 1.0 },
-          { note: 'F4', dur: 0.75 }, { note: 'E4', dur: 0.25 },
-          { note: 'G4', dur: 0.75 }, { note: 'A4', dur: 0.25 },
-          { note: 'G4', dur: 0.5 }, { note: 'F4', dur: 0.5 },
-          { note: 'C4', dur: 1.0 },
-        ],
-        bass: [
-          { note: 'C4', dur: 1.0 }, { note: 'G4', dur: 1.0 },
-          { note: 'A4', dur: 1.0 },
-          { note: 'F4', dur: 1.0 }, { note: 'G4', dur: 1.0 },
-          { note: 'D4', dur: 0.5 }, { note: 'E4', dur: 0.5 },
-          { note: 'C4', dur: 1.5 },
-        ],
-        descant: [
-          { note: null, dur: 1.5 },
-          { note: 'E5', dur: 0.25 }, { note: 'D5', dur: 0.25 },
-          { note: 'E5', dur: 0.5 }, { note: 'G5', dur: 0.5 },
-          { note: null, dur: 0.5 },
-          { note: 'A5', dur: 0.25 }, { note: 'G5', dur: 0.5 }, { note: 'E5', dur: 0.25 },
-          { note: 'D5', dur: 0.75 }, { note: 'C5', dur: 0.25 },
-          { note: 'E5', dur: 1.0 },
-        ],
-      }
-    }
+    navigation: {
+      name: "Navigation Swarm",
+      duration: 20,
+      roles: ['navigator', 'scout', 'relay', 'anchor'],
+      messages: {
+        navigator: (seq) => `nav:heading=${(Math.random()*360).toFixed(1)} speed=${(1+Math.random()*5).toFixed(1)}`,
+        scout:     (seq) => `percept:obstacle_dist=${(0.5+Math.random()*10).toFixed(1)}m bearing=${(Math.random()*360).toFixed(0)}`,
+        relay:     (seq) => `relay:forwarded=${seq} latency_ms=${(5+Math.random()*20).toFixed(0)}`,
+        anchor:    (seq) => `anchor:pos_x=${(Math.random()*100).toFixed(1)} pos_y=${(Math.random()*100).toFixed(1)} fixed=true`,
+      },
+    },
   };
 
-  const PART_ORDER = ['lead', 'harmony', 'bass', 'descant'];
-  const PART_WAVES = { lead: 'sine', harmony: 'triangle', bass: 'sine', descant: 'sine' };
-  const PART_GAINS = { lead: 0.2, harmony: 0.12, bass: 0.15, descant: 0.1 };
-  const PART_COLORS = { lead: '#00d4aa', harmony: '#4a9eff', bass: '#a855f7', descant: '#ec4899' };
-  const PART_LABELS = { lead: 'Lead Voice', harmony: 'Harmony', bass: 'Bass Line', descant: 'Descant' };
+  const ROLE_ORDER = ['coordinator', 'sensor', 'actuator', 'observer',
+                      'navigator', 'scout', 'relay', 'anchor'];
+  const ROLE_COLORS = {
+    coordinator: '#00d4aa', sensor: '#4a9eff', actuator: '#a855f7', observer: '#ec4899',
+    navigator: '#00d4aa', scout: '#4a9eff', relay: '#a855f7', anchor: '#ec4899',
+  };
+  const ROLE_LABELS = {
+    coordinator: 'Coordinator', sensor: 'Sensor Agent', actuator: 'Actuator', observer: 'Observer',
+    navigator: 'Navigator', scout: 'Scout', relay: 'Relay Node', anchor: 'Anchor',
+  };
+  const ROLE_EMOJIS = {
+    coordinator: '📡', sensor: '🌡', actuator: '⚙', observer: '👁',
+    navigator: '🧭', scout: '🔍', relay: '📶', anchor: '📌',
+  };
 
-  function playSongPart(ctx, song, partName, startTime) {
-    const part = song.parts[partName];
-    if (!part) return 0;
-    const secPerBeat = 60 / song.bpm;
-    const gainNode = ctx.createGain();
-    gainNode.gain.value = PART_GAINS[partName] || 0.15;
-    gainNode.connect(ctx.destination);
-
-    let t = startTime;
-    for (const note of part) {
-      const dur = note.dur * secPerBeat;
-      if (note.note && NOTE_FREQS[note.note]) {
-        const osc = ctx.createOscillator();
-        osc.type = PART_WAVES[partName] || 'sine';
-        osc.frequency.value = NOTE_FREQS[note.note];
-        const env = ctx.createGain();
-        env.gain.setValueAtTime(0, t);
-        env.gain.linearRampToValueAtTime(1, t + Math.min(0.02, dur * 0.1));
-        env.gain.setValueAtTime(1, t + dur * 0.7);
-        env.gain.linearRampToValueAtTime(0, t + dur);
-        osc.connect(env).connect(gainNode);
-        osc.start(t);
-        osc.stop(t + dur + 0.01);
-      }
-      t += dur;
-    }
-    return t - startTime;
-  }
-
-  function getSongDuration(song) {
-    const secPerBeat = 60 / song.bpm;
-    let maxDur = 0;
-    for (const partName of PART_ORDER) {
-      const part = song.parts[partName];
-      if (!part) continue;
-      let dur = 0;
-      for (const n of part) dur += n.dur * secPerBeat;
-      if (dur > maxDur) maxDur = dur;
-    }
-    return maxDur;
-  }
-
-  return { SONGS, PART_ORDER, PART_COLORS, PART_LABELS, NOTE_FREQS, playSongPart, getSongDuration };
+  return { TOPICS, ROLE_ORDER, ROLE_COLORS, ROLE_LABELS, ROLE_EMOJIS };
 })();
 
 
@@ -1222,7 +1175,7 @@ const agentIdHex = Array.from(agentId).map(b => b.toString(16).padStart(2,'0')).
 //         IDLE → DISCOVERY → CONFIRMED (solo) → ROLE_CLAIM → PLAYING
 const negotiation = {
   state: 'IDLE',
-  songKey: 'greeting',
+  songKey: 'status_exchange',
   peers: new Map(),       // agentHex → { songKey, role, lastSeen }
   myRole: null,
   proposedSong: null,
@@ -1310,36 +1263,35 @@ function renderAgentCards() {
   for (const [id, info] of negotiation.peers) {
     allAgents.push({ id, role: info.role, isSelf: false });
   }
-  const roleEmojis = { lead: '🎤', harmony: '🎹', bass: '🎸', descant: '🎻' };
   return allAgents.map(a => {
     const isPlaying = negotiation.state === 'PLAYING' && a.role;
     const cls = isPlaying ? 'singing' : a.isSelf ? 'listening' : '';
-    const emoji = a.role ? (roleEmojis[a.role] || '🤖') : '🤖';
+    const emoji = a.role ? (Conversations.ROLE_EMOJIS[a.role] || '🤖') : '🤖';
     const label = a.isSelf ? `You (${a.id.slice(0,8)})` : a.id.slice(0,8);
     return `<div class="agent-card ${cls}">
       <div class="agent-emoji">${emoji}</div>
       <div class="agent-name">${label}</div>
-      <div class="agent-status" style="color:${a.role ? (SongEngine.PART_COLORS[a.role] || 'var(--accent)') : 'var(--text2)'}">${a.role ? SongEngine.PART_LABELS[a.role] || a.role : 'No role'}</div>
-      <div class="agent-status">${isPlaying ? 'Playing' : a.isSelf ? negotiation.state : 'Peer'}</div>
+      <div class="agent-status" style="color:${a.role ? (Conversations.ROLE_COLORS[a.role] || 'var(--accent)') : 'var(--text2)'}">${a.role ? Conversations.ROLE_LABELS[a.role] || a.role : 'No role'}</div>
+      <div class="agent-status">${isPlaying ? 'Transmitting' : a.isSelf ? negotiation.state : 'Peer'}</div>
     </div>`;
   }).join('');
 }
 
 function renderSinging() {
-  const songs = Object.entries(SongEngine.SONGS);
+  const topics = Object.entries(Conversations.TOPICS);
   const isIdle = negotiation.state === 'IDLE';
   const isActive = !isIdle;
   return `
     <div class="card fade-in">
-      <div class="card-title">🎵 Song Negotiation Protocol</div>
+      <div class="card-title">📡 AILL Negotiation Protocol</div>
       <p style="color:var(--text2);font-size:13px;margin-bottom:16px;line-height:1.6">
-        Distributed song negotiation: devices discover each other acoustically, propose songs via
-        AILL PROPOSE/ACCEPT/REJECT messages, agree on roles, then play together. All coordination
-        happens through AILL wire-format data transmitted as acoustic tones.
+        Distributed negotiation: devices discover each other, propose conversation topics via
+        AILL PROPOSE/ACCEPT/REJECT messages, claim roles, then exchange data. Every sound is
+        AILL wire-format data transmitted as acoustic tones — no human-readable audio.
       </p>
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
         <select id="songSelect" class="text-input" style="flex:0 0 200px" ${isActive ? 'disabled' : ''}>
-          ${songs.map(([k,v]) => `<option value="${k}" ${k===negotiation.songKey?'selected':''}>${v.name}</option>`).join('')}
+          ${topics.map(([k,v]) => `<option value="${k}" ${k===negotiation.songKey?'selected':''}>${v.name}</option>`).join('')}
         </select>
         <button class="btn btn-primary" id="btnStartNeg" onclick="startNegotiation()" ${isActive ? 'disabled' : ''}>
           Start Negotiation
@@ -1405,10 +1357,6 @@ function negTransmit(wireData, label) {
 }
 
 function negSendPragmatic(act, topicId, content) {
-  if (!AILL.encodePragmatic) {
-    addLog('warn', 'WASM negotiation functions not loaded');
-    return;
-  }
   const wire = AILL.encodePragmatic(act, topicId, content, agentId);
   const actNames = { 0x88: 'PROPOSE', 0x89: 'ACCEPT', 0x85: 'REJECT', 0x81: 'ASSERT' };
   const actName = actNames[act] || `0x${act.toString(16)}`;
@@ -1417,7 +1365,6 @@ function negSendPragmatic(act, topicId, content) {
 }
 
 function handleNegotiationMessage(wireData) {
-  if (!AILL.decodePragmatic) return;
   const msg = AILL.decodePragmatic(wireData);
   if (!msg || !msg.act) return;
 
@@ -1539,7 +1486,6 @@ async function startNegotiation() {
 }
 
 function proposeSong() {
-  const songKeys = Object.keys(SongEngine.SONGS);
   negotiation.proposedSong = negotiation.songKey;
   negSetState('PROPOSING');
   setStatus('PROPOSING', 'var(--yellow)');
@@ -1567,18 +1513,19 @@ function claimRole() {
     if (peer.role) takenRoles.add(peer.role);
   }
 
-  // Claim first available role in order
-  const available = SongEngine.PART_ORDER.filter(r => !takenRoles.has(r));
+  // Claim first available role from this topic's role list
+  const topicKey = negotiation.winningSong || negotiation.songKey;
+  const topic = Conversations.TOPICS[topicKey];
+  const topicRoles = topic ? topic.roles : Conversations.ROLE_ORDER.slice(0, 4);
+  const available = topicRoles.filter(r => !takenRoles.has(r));
   if (available.length === 0) {
     addLog('warn', 'All roles taken!');
-    negotiation.myRole = SongEngine.PART_ORDER[0]; // fallback
+    negotiation.myRole = topicRoles[0]; // fallback
   } else {
-    // Among available roles, lower UUID gets first pick
-    // Since we're claiming for ourselves, just pick the first available
     negotiation.myRole = available[0];
   }
 
-  addLog('info', `Claiming role: ${SongEngine.PART_LABELS[negotiation.myRole] || negotiation.myRole}`);
+  addLog('info', `Claiming role: ${Conversations.ROLE_LABELS[negotiation.myRole] || negotiation.myRole}`);
   negSendPragmatic(0x88, NEG_TOPIC.ROLE, negotiation.myRole); // PROPOSE role
 
   updateNegUI();
@@ -1588,43 +1535,54 @@ function claimRole() {
 }
 
 function startPlaying() {
-  const songKey = negotiation.winningSong || negotiation.songKey;
-  const song = SongEngine.SONGS[songKey];
-  if (!song) {
-    addLog('warn', `Unknown song: ${songKey}`);
+  const topicKey = negotiation.winningSong || negotiation.songKey;
+  const topic = Conversations.TOPICS[topicKey];
+  if (!topic) {
+    addLog('warn', `Unknown topic: ${topicKey}`);
     stopNegotiation();
     return;
   }
 
   negSetState('PLAYING');
-  setStatus('PLAYING', 'var(--accent)');
+  setStatus('TRANSMITTING', 'var(--accent)');
 
-  const ctx = ensureAudioCtx();
-  const startTime = ctx.currentTime + 0.1;
-
-  addLog('song', `Playing "${song.name}" as ${SongEngine.PART_LABELS[negotiation.myRole]}`);
-
-  // Channel B: Music playback
-  SongEngine.playSongPart(ctx, song, negotiation.myRole, startTime);
+  const role = negotiation.myRole;
+  const msgGen = topic.messages[role];
+  addLog('info', `Transmitting "${topic.name}" as ${Conversations.ROLE_LABELS[role] || role}`);
 
   // Start visualizations
   startVisualizations();
 
-  // Channel A: Heartbeats every 2s during playback
+  // Transmit AILL data as acoustic tones every 2s
+  // Each role sends its own type of AILL message
+  let seq = 0;
   negotiation.heartbeatTimer = setInterval(() => {
     if (negotiation.state !== 'PLAYING') return;
-    const hbContent = `${songKey}:${negotiation.myRole}:playing`;
-    negSendPragmatic(0x81, NEG_TOPIC.HEARTBEAT, hbContent); // ASSERT heartbeat
+    seq++;
+
+    // Role-specific AILL data message
+    if (msgGen) {
+      const content = msgGen(seq);
+      negSendPragmatic(0x81, NEG_TOPIC.HEARTBEAT, `${topicKey}:${role}:${content}`);
+    } else {
+      // Fallback heartbeat
+      negSendPragmatic(0x81, NEG_TOPIC.HEARTBEAT, `${topicKey}:${role}:active seq=${seq}`);
+    }
   }, 2000);
 
-  // End after song completes
-  const dur = SongEngine.getSongDuration(song);
+  // Send first message immediately
+  if (msgGen) {
+    const content = msgGen(0);
+    negSendPragmatic(0x81, NEG_TOPIC.HEARTBEAT, `${topicKey}:${role}:${content}`);
+  }
+
+  // End after topic duration
   setTimeout(() => {
     if (negotiation.state === 'PLAYING') {
-      addLog('info', '─── Song Complete ───');
+      addLog('info', '─── Conversation Complete ───');
       stopNegotiation();
     }
-  }, (dur + 0.5) * 1000);
+  }, topic.duration * 1000);
 }
 
 function stopNegotiation() {
