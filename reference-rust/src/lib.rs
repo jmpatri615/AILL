@@ -8,6 +8,9 @@ pub mod decoder;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+#[cfg(feature = "audio")]
+pub mod audio;
+
 // Re-exports for convenience
 pub use error::AILLError;
 pub use ast::{AstNode, MetaHeader, LiteralValue, DecodedEpoch};

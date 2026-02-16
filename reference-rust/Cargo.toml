@@ -8,6 +8,8 @@ license = "MIT"
 [features]
 default = []
 wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen", "dep:js-sys"]
+audio = ["dep:hound", "dep:rustfft"]
+audio-live = ["audio", "dep:cpal"]
 
 [dependencies]
 half = "2"
@@ -18,6 +20,11 @@ serde_json = "1"
 wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys = { version = "0.3", optional = true }
+
+# Audio deps
+hound = { version = "3.5", optional = true }
+rustfft = { version = "6.2", optional = true }
+cpal = { version = "0.15", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
