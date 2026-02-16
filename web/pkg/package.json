@@ -1,0 +1,17 @@
+{
+  "name": "aill",
+  "type": "module",
+  "description": "AILL (Acoustic Inter-agent Linguistic Link) protocol reference implementation",
+  "version": "1.1.0",
+  "license": "MIT",
+  "files": [
+    "aill_bg.wasm",
+    "aill.js",
+    "aill.d.ts"
+  ],
+  "main": "aill.js",
+  "types": "aill.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

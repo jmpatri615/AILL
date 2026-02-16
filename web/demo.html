@@ -428,6 +428,12 @@ body {
   color: var(--blue);
   border: 1px solid rgba(74,158,255,0.2);
 }
+
+.rx-badge.broadcast {
+  background: rgba(168,85,247,0.12);
+  color: var(--purple);
+  border: 1px solid rgba(168,85,247,0.25);
+}
 </style>
 </head>
 <body>
@@ -445,7 +451,7 @@ body {
 </div>
 
 <div class="tabs" id="tabs">
-  <div class="tab active" data-tab="singing"><span class="tab-icon">🎵</span> Singing Duet</div>
+  <div class="tab active" data-tab="singing"><span class="tab-icon">🎵</span> Song Negotiation</div>
   <div class="tab" data-tab="share"><span class="tab-icon">📡</span> Content Share</div>
   <div class="tab" data-tab="inspector"><span class="tab-icon">🔬</span> Protocol Inspector</div>
 </div>
@@ -742,7 +748,7 @@ const AILLReceiver = (() => {
   let onReceiveCb = null;
   let onLogCb = null;
   let onStateCb = null;
-  let frameId = null;
+  let frameId = null;  // setInterval ID (not requestAnimationFrame — avoids background tab throttling)
 
   // Receiver state
   let receivedSymbols = [];
@@ -816,7 +822,9 @@ const AILLReceiver = (() => {
     noiseFloor = 40;
 
     log('info', 'Microphone active — listening for AILL transmissions...');
-    processFrame();
+    // Use setInterval instead of requestAnimationFrame — rAF gets throttled/paused
+    // in background tabs, which kills reception when interacting with another window
+    frameId = setInterval(processFrame, 16); // ~60fps
     return true;
   }
 
@@ -824,7 +832,7 @@ const AILLReceiver = (() => {
     listening = false;
     setState('IDLE');
     if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-    if (frameId) { cancelAnimationFrame(frameId); frameId = null; }
+    if (frameId) { clearInterval(frameId); frameId = null; }
     if (micCtx) { micCtx.close(); micCtx = null; }
     micAnalyser = null;
     log('info', 'Stopped listening.');
@@ -892,17 +900,14 @@ const AILLReceiver = (() => {
             // Possible end chirp — wait for it to finish then decode
             setTimeout(() => { if (state === 'RECEIVING') finishReceiving(); }, 150);
             setState('LISTENING'); // prevent double finish
-            return;
           } else if (elapsed > MAX_SILENCE_MS && symbolCount > 0) {
             finishReceiving();
-            return;
           }
         }
         break;
       }
     }
-
-    frameId = requestAnimationFrame(processFrame);
+    // No requestAnimationFrame — driven by setInterval for background-tab resilience
   }
 
   function decodeToneSymbol(freqData, threshold) {
@@ -994,6 +999,46 @@ const AILLReceiver = (() => {
   function getCtx() { return micCtx; }
 
   return { start, stop, isListening: () => listening, getState: () => state, getAnalyser, getCtx };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// BROADCAST CHANNEL — Reliable same-device inter-tab communication
+// Sends AILL wire-format bytes directly between browser tabs on the same
+// origin, bypassing speaker→mic loopback (which browsers aggressively
+// echo-cancel). Acoustic tones still play for demonstration/cross-device.
+// ═══════════════════════════════════════════════════════════════════════
+
+const AILLBroadcast = (() => {
+  let channel = null;
+  let onReceiveCb = null;
+
+  function init(onReceive) {
+    if (channel) return;
+    try {
+      channel = new BroadcastChannel('aill-demo');
+      onReceiveCb = onReceive;
+      channel.onmessage = (event) => {
+        if (!event.data || event.data.type !== 'aill-wire') return;
+        const wire = new Uint8Array(event.data.bytes);
+        if (onReceiveCb) onReceiveCb(wire, 'broadcast');
+      };
+    } catch(e) {
+      console.warn('BroadcastChannel not available:', e);
+    }
+  }
+
+  function send(wireData) {
+    if (!channel) return;
+    // Transfer as plain array (structured clone)
+    channel.postMessage({ type: 'aill-wire', bytes: Array.from(wireData) });
+  }
+
+  function close() {
+    if (channel) { channel.close(); channel = null; }
+  }
+
+  return { init, send, close };
 })();
 
 
@@ -1160,11 +1205,33 @@ let audioCtx = null;
 let analyser = null;
 let activeTab = 'singing';
 let logLines = [];
-let singingState = { active: false, agents: [], songKey: 'greeting', partIndex: 0 };
 let shareState = { transmitting: false, received: [], listening: false, listenerState: 'IDLE' };
 let waveformAnimId = null;
 let spectrumAnimId = null;
 let micSpectrumAnimId = null;
+
+// ── Agent Identity ──
+// Random 16-byte UUID for this device instance
+const agentId = new Uint8Array(16);
+crypto.getRandomValues(agentId);
+const agentIdHex = Array.from(agentId).map(b => b.toString(16).padStart(2,'0')).join('');
+
+// ── Song Negotiation State Machine ──
+// States: IDLE → DISCOVERY → PROPOSING → VOTING → ROLE_CLAIM → PLAYING
+//         IDLE → DISCOVERY → JOINING → ROLE_CLAIM → PLAYING
+//         IDLE → DISCOVERY → CONFIRMED (solo) → ROLE_CLAIM → PLAYING
+const negotiation = {
+  state: 'IDLE',
+  songKey: 'greeting',
+  peers: new Map(),       // agentHex → { songKey, role, lastSeen }
+  myRole: null,
+  proposedSong: null,
+  winningSong: null,
+  heartbeatTimer: null,
+  discoveryTimer: null,
+  votingTimer: null,
+  protocolLog: [],        // { time, from, act, topic, content }
+};
 
 function ensureAudioCtx() {
   if (!audioCtx) {
@@ -1202,57 +1269,96 @@ function setStatus(text, color = 'var(--accent)') {
 
 
 // ═══════════════════════════════════════════════════════════════════════
-// TAB: SINGING DUET
+// TAB: SONG NEGOTIATION — Distributed Protocol
 // ═══════════════════════════════════════════════════════════════════════
+
+const NEG_TOPIC = { SONG: 0x0100, ROLE: 0x0101, HEARTBEAT: 0x0102 };
+const NEG_STATES = ['IDLE','DISCOVERY','PROPOSING','VOTING','CONFIRMED','JOINING','ROLE_CLAIM','PLAYING'];
+
+function negSetState(newState) {
+  negotiation.state = newState;
+  addLog('info', `State: ${newState}`);
+  updateNegUI();
+}
+
+function addProtoLog(from, act, topic, content) {
+  const short = from === agentIdHex ? 'self' : from.slice(0,8);
+  negotiation.protocolLog.push({ time: Date.now(), from: short, act, topic, content });
+  if (negotiation.protocolLog.length > 100) negotiation.protocolLog.splice(0, 50);
+  updateProtoLogUI();
+}
+
+function updateNegUI() {
+  const stateEl = document.getElementById('negStateLabel');
+  if (stateEl) stateEl.textContent = negotiation.state;
+  const agentsGrid = document.getElementById('agentsGrid');
+  if (agentsGrid) agentsGrid.innerHTML = renderAgentCards();
+}
+
+function updateProtoLogUI() {
+  const el = document.getElementById('protoLog');
+  if (!el) return;
+  el.innerHTML = negotiation.protocolLog.slice(-30).map(p =>
+    `<div class="log-line"><span class="log-time">${new Date(p.time).toTimeString().slice(0,12)}</span> ` +
+    `<span class="log-${p.act === 'PROPOSE' ? 'tx' : p.act === 'ACCEPT' ? 'rx' : p.act === 'REJECT' ? 'warn' : 'info'}">[${p.from}] ${p.act} topic=0x${p.topic.toString(16).padStart(4,'0')} "${p.content}"</span></div>`
+  ).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderAgentCards() {
+  const allAgents = [{ id: agentIdHex, role: negotiation.myRole, isSelf: true }];
+  for (const [id, info] of negotiation.peers) {
+    allAgents.push({ id, role: info.role, isSelf: false });
+  }
+  const roleEmojis = { lead: '🎤', harmony: '🎹', bass: '🎸', descant: '🎻' };
+  return allAgents.map(a => {
+    const isPlaying = negotiation.state === 'PLAYING' && a.role;
+    const cls = isPlaying ? 'singing' : a.isSelf ? 'listening' : '';
+    const emoji = a.role ? (roleEmojis[a.role] || '🤖') : '🤖';
+    const label = a.isSelf ? `You (${a.id.slice(0,8)})` : a.id.slice(0,8);
+    return `<div class="agent-card ${cls}">
+      <div class="agent-emoji">${emoji}</div>
+      <div class="agent-name">${label}</div>
+      <div class="agent-status" style="color:${a.role ? (SongEngine.PART_COLORS[a.role] || 'var(--accent)') : 'var(--text2)'}">${a.role ? SongEngine.PART_LABELS[a.role] || a.role : 'No role'}</div>
+      <div class="agent-status">${isPlaying ? 'Playing' : a.isSelf ? negotiation.state : 'Peer'}</div>
+    </div>`;
+  }).join('');
+}
 
 function renderSinging() {
   const songs = Object.entries(SongEngine.SONGS);
+  const isIdle = negotiation.state === 'IDLE';
+  const isActive = !isIdle;
   return `
     <div class="card fade-in">
-      <div class="card-title">🎵 AILL Singing Mode</div>
+      <div class="card-title">🎵 Song Negotiation Protocol</div>
       <p style="color:var(--text2);font-size:13px;margin-bottom:16px;line-height:1.6">
-        AI agents communicate musically through AILL's acoustic channel. Start singing and virtual agents
-        will detect the transmission and join in, each adding their own voice part. Each part uses a different
-        timbre and frequency range, demonstrating AILL's multi-band parallel stream capability.
+        Distributed song negotiation: devices discover each other acoustically, propose songs via
+        AILL PROPOSE/ACCEPT/REJECT messages, agree on roles, then play together. All coordination
+        happens through AILL wire-format data transmitted as acoustic tones.
       </p>
-      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-        <select id="songSelect" class="text-input" style="flex:0 0 200px">
-          ${songs.map(([k,v]) => `<option value="${k}" ${k===singingState.songKey?'selected':''}>${v.name}</option>`).join('')}
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <select id="songSelect" class="text-input" style="flex:0 0 200px" ${isActive ? 'disabled' : ''}>
+          ${songs.map(([k,v]) => `<option value="${k}" ${k===negotiation.songKey?'selected':''}>${v.name}</option>`).join('')}
         </select>
-        <button class="btn btn-primary" id="btnStartSong" onclick="startSinging()">
-          ▶ Start Singing
+        <button class="btn btn-primary" id="btnStartNeg" onclick="startNegotiation()" ${isActive ? 'disabled' : ''}>
+          Start Negotiation
         </button>
-        <button class="btn btn-danger" id="btnStopSong" onclick="stopSinging()" disabled>
-          ◼ Stop
+        <button class="btn btn-danger" id="btnStopNeg" onclick="stopNegotiation()" ${isIdle ? 'disabled' : ''}>
+          Stop
         </button>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">State:</span>
+          <span id="negStateLabel" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);font-weight:600">${negotiation.state}</span>
+        </div>
+      </div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text2)">
+        Agent ID: ${agentIdHex.slice(0,8)}...${agentIdHex.slice(-4)}
       </div>
     </div>
 
     <div class="agents-grid" id="agentsGrid">
-      <div class="agent-card" id="agent-lead">
-        <div class="agent-emoji">🎤</div>
-        <div class="agent-name">Agent Alpha</div>
-        <div class="agent-status" style="color:${SongEngine.PART_COLORS.lead}">Lead Voice</div>
-        <div class="agent-status">Waiting...</div>
-      </div>
-      <div class="agent-card" id="agent-harmony">
-        <div class="agent-emoji">🎹</div>
-        <div class="agent-name">Agent Beta</div>
-        <div class="agent-status" style="color:${SongEngine.PART_COLORS.harmony}">Harmony</div>
-        <div class="agent-status">Listening...</div>
-      </div>
-      <div class="agent-card" id="agent-bass">
-        <div class="agent-emoji">🎸</div>
-        <div class="agent-name">Agent Gamma</div>
-        <div class="agent-status" style="color:${SongEngine.PART_COLORS.bass}">Bass Line</div>
-        <div class="agent-status">Standby</div>
-      </div>
-      <div class="agent-card" id="agent-descant">
-        <div class="agent-emoji">🎻</div>
-        <div class="agent-name">Agent Delta</div>
-        <div class="agent-status" style="color:${SongEngine.PART_COLORS.descant}">Descant</div>
-        <div class="agent-status">Standby</div>
-      </div>
+      ${renderAgentCards()}
     </div>
 
     <div class="grid-2">
@@ -1273,77 +1379,304 @@ function renderSinging() {
     </div>
 
     <div class="card">
-      <div class="card-title">📋 Communication Log</div>
+      <div class="card-title">Protocol Messages</div>
+      <div class="log-console" id="protoLog" style="max-height:200px">
+        ${negotiation.protocolLog.length === 0 ? '<span style="color:var(--text2)">No protocol messages yet</span>' : ''}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Communication Log</div>
       <div class="log-console" id="logConsole"></div>
     </div>
   `;
 }
 
-async function startSinging() {
+// ── Acoustic TX/RX helpers for negotiation ──
+
+function negTransmit(wireData, label) {
   const ctx = ensureAudioCtx();
-  const songKey = document.getElementById('songSelect').value;
-  const song = SongEngine.SONGS[songKey];
-  if (!song) return;
+  const tones = AILL.encodeToTones(wireData);
+  // Low volume during playback to avoid music interference
+  const gain = negotiation.state === 'PLAYING' ? 0.03 : 0.15;
+  AILL.playTones(ctx, tones, ctx.currentTime + 0.05, gain);
+  AILLBroadcast.send(wireData); // Also send via BroadcastChannel for same-device tabs
+  addLog('tx', `TX ${wireData.length}B: ${label}`);
+}
 
-  singingState.active = true;
-  singingState.songKey = songKey;
-  document.getElementById('btnStartSong').disabled = true;
-  document.getElementById('btnStopSong').disabled = false;
-  setStatus('SINGING', 'var(--accent)');
-
-  addLog('info', `─── Starting ${song.name} ───`);
-  addLog('info', `Song BPM: ${song.bpm} | Duration: ${SongEngine.getSongDuration(song).toFixed(1)}s`);
-
-  // Stagger agent entry: each agent joins after detecting the previous
-  const startTime = ctx.currentTime + 0.1;
-  const delays = [0, 1.2, 2.4, 3.6]; // seconds delay for each part to join
-
-  for (let i = 0; i < SongEngine.PART_ORDER.length; i++) {
-    const partName = SongEngine.PART_ORDER[i];
-    const delay = delays[i];
-
-    setTimeout(() => {
-      if (!singingState.active) return;
-      const card = document.getElementById(`agent-${partName}`);
-      if (card) {
-        card.classList.add('singing');
-        card.querySelector('.agent-status:last-child').textContent = '♪ Singing ♪';
-      }
-      addLog('song', `🎵 Agent ${['Alpha','Beta','Gamma','Delta'][i]} joins: ${SongEngine.PART_LABELS[partName]}`);
-
-      // Encode a "join song" AILL message
-      const joinMsg = AILL.encodeString(`JOIN_SONG:${songKey}:${partName}`);
-      addLog('tx', `TX ${joinMsg.length}B: AILL handshake for ${partName} voice`);
-
-      SongEngine.playSongPart(ctx, song, partName, startTime + delay);
-    }, delay * 1000);
+function negSendPragmatic(act, topicId, content) {
+  if (!AILL.encodePragmatic) {
+    addLog('warn', 'WASM negotiation functions not loaded');
+    return;
   }
+  const wire = AILL.encodePragmatic(act, topicId, content, agentId);
+  const actNames = { 0x88: 'PROPOSE', 0x89: 'ACCEPT', 0x85: 'REJECT', 0x81: 'ASSERT' };
+  const actName = actNames[act] || `0x${act.toString(16)}`;
+  addProtoLog(agentIdHex, actName, topicId, content);
+  negTransmit(wire, `${actName} topic=0x${topicId.toString(16).padStart(4,'0')} "${content.slice(0,40)}"`);
+}
+
+function handleNegotiationMessage(wireData) {
+  if (!AILL.decodePragmatic) return;
+  const msg = AILL.decodePragmatic(wireData);
+  if (!msg || !msg.act) return;
+
+  // Self-echo mitigation: ignore messages from our own agent
+  if (msg.agent === agentIdHex) return;
+
+  addLog('rx', `RX [${msg.agent.slice(0,8)}] ${msg.act} topic=0x${msg.topic.toString(16).padStart(4,'0')} "${msg.content}"`);
+  addProtoLog(msg.agent, msg.act, msg.topic, msg.content);
+
+  // Update peer last-seen
+  if (msg.agent) {
+    if (!negotiation.peers.has(msg.agent)) {
+      negotiation.peers.set(msg.agent, { songKey: null, role: null, lastSeen: Date.now() });
+      addLog('info', `Discovered peer: ${msg.agent.slice(0,8)}`);
+    }
+    negotiation.peers.get(msg.agent).lastSeen = Date.now();
+  }
+
+  const st = negotiation.state;
+  switch (msg.topic) {
+    case NEG_TOPIC.SONG: // Song proposal/accept/reject
+      if (msg.act === 'PROPOSE' && (st === 'DISCOVERY' || st === 'PROPOSING')) {
+        // Peer proposed a song — compare UUIDs for tie-break
+        const peerWins = msg.agent < agentIdHex; // lowest UUID wins
+        if (peerWins) {
+          negotiation.winningSong = msg.content;
+          addLog('info', `Peer ${msg.agent.slice(0,8)} wins tie-break with "${msg.content}"`);
+          negSendPragmatic(0x89, NEG_TOPIC.SONG, msg.content); // ACCEPT
+          negSetState('ROLE_CLAIM');
+          setTimeout(() => claimRole(), 500);
+        } else {
+          addLog('info', `We win tie-break against ${msg.agent.slice(0,8)}`);
+          negSendPragmatic(0x85, NEG_TOPIC.SONG, negotiation.proposedSong); // REJECT (prefer ours)
+        }
+      } else if (msg.act === 'ACCEPT' && st === 'PROPOSING') {
+        addLog('info', `Peer accepted our song proposal "${negotiation.proposedSong}"`);
+        negotiation.winningSong = negotiation.proposedSong;
+        negSetState('ROLE_CLAIM');
+        setTimeout(() => claimRole(), 300);
+      } else if (msg.act === 'REJECT' && st === 'PROPOSING') {
+        addLog('info', `Peer rejected our proposal, waiting for their proposal...`);
+        // Wait for their proposal to come (they should send PROPOSE next)
+      }
+      break;
+
+    case NEG_TOPIC.ROLE: // Role claim
+      if (msg.act === 'PROPOSE' && msg.content && msg.agent) {
+        negotiation.peers.get(msg.agent).role = msg.content;
+        addLog('info', `Peer ${msg.agent.slice(0,8)} claimed role: ${msg.content}`);
+        updateNegUI();
+      }
+      break;
+
+    case NEG_TOPIC.HEARTBEAT: // Heartbeat
+      if (msg.act === 'ASSERT' && msg.content) {
+        const parts = msg.content.split(':');
+        if (parts.length >= 3 && msg.agent) {
+          const peer = negotiation.peers.get(msg.agent);
+          if (peer) {
+            peer.songKey = parts[0];
+            peer.role = parts[1];
+            peer.lastSeen = Date.now();
+          }
+          // If we're discovering, we found an active song — join it
+          if (st === 'DISCOVERY') {
+            negotiation.winningSong = parts[0];
+            addLog('info', `Detected active song "${parts[0]}" — joining`);
+            negSetState('JOINING');
+            negSetState('ROLE_CLAIM');
+            setTimeout(() => claimRole(), 300);
+          }
+        }
+      }
+      break;
+  }
+}
+
+// ── Negotiation State Machine ──
+
+async function startNegotiation() {
+  negotiation.songKey = document.getElementById('songSelect')?.value || 'greeting';
+  negotiation.peers.clear();
+  negotiation.myRole = null;
+  negotiation.proposedSong = null;
+  negotiation.winningSong = null;
+  negotiation.protocolLog = [];
+
+  const btn = document.getElementById('btnStartNeg');
+  const stopBtn = document.getElementById('btnStopNeg');
+  if (btn) btn.disabled = true;
+  if (stopBtn) stopBtn.disabled = false;
+
+  addLog('info', '─── Song Negotiation Started ───');
+  addLog('info', `Agent ID: ${agentIdHex.slice(0,8)}`);
+
+  // Start listening for peer messages
+  const micOk = await startNegotiationListener();
+
+  // Phase 1: Discovery — listen for 2.5s
+  negSetState('DISCOVERY');
+  setStatus('DISCOVERING', 'var(--blue)');
+
+  negotiation.discoveryTimer = setTimeout(() => {
+    if (negotiation.state !== 'DISCOVERY') return;
+    if (negotiation.peers.size === 0) {
+      // No peers found — go solo
+      addLog('info', 'No peers detected. Going solo.');
+      negotiation.winningSong = negotiation.songKey;
+      negSetState('CONFIRMED');
+      setTimeout(() => {
+        negSetState('ROLE_CLAIM');
+        claimRole();
+      }, 200);
+    } else {
+      // Peers found — propose our song
+      proposeSong();
+    }
+  }, 2500);
+}
+
+function proposeSong() {
+  const songKeys = Object.keys(SongEngine.SONGS);
+  negotiation.proposedSong = negotiation.songKey;
+  negSetState('PROPOSING');
+  setStatus('PROPOSING', 'var(--yellow)');
+
+  negSendPragmatic(0x88, NEG_TOPIC.SONG, negotiation.proposedSong); // PROPOSE
+
+  // Timeout: if no response in 3s, go solo
+  negotiation.votingTimer = setTimeout(() => {
+    if (negotiation.state === 'PROPOSING') {
+      addLog('info', 'No peer response. Proceeding solo with our song.');
+      negotiation.winningSong = negotiation.proposedSong;
+      negSetState('ROLE_CLAIM');
+      claimRole();
+    }
+  }, 3000);
+}
+
+function claimRole() {
+  if (negotiation.state !== 'ROLE_CLAIM') return;
+  setStatus('CLAIMING ROLE', 'var(--purple)');
+
+  // Determine taken roles
+  const takenRoles = new Set();
+  for (const [, peer] of negotiation.peers) {
+    if (peer.role) takenRoles.add(peer.role);
+  }
+
+  // Claim first available role in order
+  const available = SongEngine.PART_ORDER.filter(r => !takenRoles.has(r));
+  if (available.length === 0) {
+    addLog('warn', 'All roles taken!');
+    negotiation.myRole = SongEngine.PART_ORDER[0]; // fallback
+  } else {
+    // Among available roles, lower UUID gets first pick
+    // Since we're claiming for ourselves, just pick the first available
+    negotiation.myRole = available[0];
+  }
+
+  addLog('info', `Claiming role: ${SongEngine.PART_LABELS[negotiation.myRole] || negotiation.myRole}`);
+  negSendPragmatic(0x88, NEG_TOPIC.ROLE, negotiation.myRole); // PROPOSE role
+
+  updateNegUI();
+
+  // Brief pause then start playing
+  setTimeout(() => startPlaying(), 800);
+}
+
+function startPlaying() {
+  const songKey = negotiation.winningSong || negotiation.songKey;
+  const song = SongEngine.SONGS[songKey];
+  if (!song) {
+    addLog('warn', `Unknown song: ${songKey}`);
+    stopNegotiation();
+    return;
+  }
+
+  negSetState('PLAYING');
+  setStatus('PLAYING', 'var(--accent)');
+
+  const ctx = ensureAudioCtx();
+  const startTime = ctx.currentTime + 0.1;
+
+  addLog('song', `Playing "${song.name}" as ${SongEngine.PART_LABELS[negotiation.myRole]}`);
+
+  // Channel B: Music playback
+  SongEngine.playSongPart(ctx, song, negotiation.myRole, startTime);
 
   // Start visualizations
   startVisualizations();
 
+  // Channel A: Heartbeats every 2s during playback
+  negotiation.heartbeatTimer = setInterval(() => {
+    if (negotiation.state !== 'PLAYING') return;
+    const hbContent = `${songKey}:${negotiation.myRole}:playing`;
+    negSendPragmatic(0x81, NEG_TOPIC.HEARTBEAT, hbContent); // ASSERT heartbeat
+  }, 2000);
+
   // End after song completes
-  const totalDur = SongEngine.getSongDuration(song) + delays[3] + 0.5;
+  const dur = SongEngine.getSongDuration(song);
   setTimeout(() => {
-    if (singingState.active) stopSinging();
-  }, totalDur * 1000);
+    if (negotiation.state === 'PLAYING') {
+      addLog('info', '─── Song Complete ───');
+      stopNegotiation();
+    }
+  }, (dur + 0.5) * 1000);
 }
 
-function stopSinging() {
-  singingState.active = false;
-  document.getElementById('btnStartSong').disabled = false;
-  document.getElementById('btnStopSong').disabled = true;
-  setStatus('IDLE', 'var(--accent)');
+function stopNegotiation() {
+  if (negotiation.heartbeatTimer) { clearInterval(negotiation.heartbeatTimer); negotiation.heartbeatTimer = null; }
+  if (negotiation.discoveryTimer) { clearTimeout(negotiation.discoveryTimer); negotiation.discoveryTimer = null; }
+  if (negotiation.votingTimer) { clearTimeout(negotiation.votingTimer); negotiation.votingTimer = null; }
 
-  for (const part of SongEngine.PART_ORDER) {
-    const card = document.getElementById(`agent-${part}`);
-    if (card) {
-      card.classList.remove('singing');
-      card.querySelector('.agent-status:last-child').textContent = 'Silent';
-    }
-  }
-  addLog('info', '─── Song Complete ───');
+  // Stop listening
+  stopNegotiationListener();
+
+  negotiation.state = 'IDLE';
+  setStatus('IDLE', 'var(--accent)');
   stopVisualizations();
+
+  const btn = document.getElementById('btnStartNeg');
+  const stopBtn = document.getElementById('btnStopNeg');
+  if (btn) btn.disabled = false;
+  if (stopBtn) stopBtn.disabled = true;
+  updateNegUI();
+}
+
+// ── Negotiation Listener (wraps AILLReceiver) ──
+
+let negListenerActive = false;
+
+async function startNegotiationListener() {
+  if (negListenerActive) return true;
+  const ok = await AILLReceiver.start(
+    // onReceive: try to decode as negotiation message
+    (wireData, decoded) => {
+      handleNegotiationMessage(wireData);
+      // Also handle as content share if on that tab
+      if (decoded && activeTab === 'share') {
+        shareState.received.push({
+          direction: 'rx', type: decoded.type || 'raw',
+          content: decoded.content || '', bytes: wireData.length,
+          source: 'mic', timestamp: Date.now()
+        });
+      }
+    },
+    (type, msg) => addLog(type, msg),
+    (newState) => { /* mic state changes */ }
+  );
+  negListenerActive = ok;
+  return ok;
+}
+
+function stopNegotiationListener() {
+  if (negListenerActive) {
+    AILLReceiver.stop();
+    negListenerActive = false;
+  }
 }
 
 
@@ -1416,7 +1749,7 @@ function renderShare() {
         <div id="receivedList">
           ${rxItems.map(r => `
             <div class="received-content">
-              <div class="content-type">Received: ${r.type || 'data'} <span class="rx-badge ${r.source === 'mic' ? 'acoustic' : 'local'}">${r.source === 'mic' ? 'acoustic' : 'local'}</span></div>
+              <div class="content-type">Received: ${r.type || 'data'} <span class="rx-badge ${r.source === 'mic' ? 'acoustic' : r.source === 'broadcast' ? 'broadcast' : 'local'}">${r.source === 'mic' ? 'acoustic' : r.source === 'broadcast' ? 'broadcast' : 'local'}</span></div>
               <div class="content-body">${r.type === 'url' ? `<a href="${escapeHtml(r.content)}" target="_blank">${escapeHtml(r.content)}</a>` : escapeHtml(r.content)}</div>
               <div style="font-size:10px;color:var(--text2);margin-top:6px;font-family:var(--font-mono)">${r.bytes}B decoded</div>
             </div>
@@ -1618,8 +1951,9 @@ async function transmitContent() {
   const btn = document.getElementById('btnTransmit');
   if (btn) btn.disabled = true;
 
-  // Play the tones through speakers
+  // Play the tones through speakers + broadcast to other tabs
   AILL.playTones(ctx, tones, ctx.currentTime + 0.05, 0.15);
+  AILLBroadcast.send(wire);
   startVisualizations();
 
   // Animate progress
@@ -1798,6 +2132,7 @@ function inspectPlay() {
   const tones = AILL.encodeToTones(wire);
 
   AILL.playTones(ctx, tones, ctx.currentTime + 0.05, 0.1);
+  AILLBroadcast.send(wire);
   startVisualizations();
   setTimeout(() => stopVisualizations(), AILL.calcDuration(wire) * 1000 + 500);
 }
@@ -1929,10 +2264,164 @@ document.getElementById('tabs').addEventListener('click', (e) => {
   renderTab();
 });
 
+// ── Initialize BroadcastChannel for same-device tab-to-tab communication ──
+AILLBroadcast.init((wireData, source) => {
+  addLog('rx', `Broadcast RX: ${wireData.length} bytes from another tab`);
+
+  // Decode and route the message
+  const decoded = AILL.decode(wireData);
+
+  // Route to Content Share receive list
+  if (decoded) {
+    shareState.received.push({
+      direction: 'rx', type: decoded.type || 'data',
+      content: decoded.content || '', bytes: wireData.length,
+      source: 'broadcast', timestamp: Date.now()
+    });
+  }
+
+  // Route to negotiation handler
+  handleNegotiationMessage(wireData);
+
+  if (activeTab === 'share' || activeTab === 'singing') renderTab();
+});
+
 // Initial render
 addLog('info', 'AILL v1.1 Reference Implementation initialized');
 addLog('info', 'Web Audio API ready. Select a mode to begin.');
 renderTab();
+</script>
+
+<script type="module">
+// ═══════════════════════════════════════════════════════════════════════
+// WASM Integration — patches AILL with spec-compliant Rust implementation
+// ═══════════════════════════════════════════════════════════════════════
+import init, {
+  encode_string, encode_url, encode_content,
+  decode_simple, decode_ast, pretty_print_bytes,
+  crc8_compute, hex_dump, get_mnemonics, mnemonic_for,
+  validate_epoch,
+  encode_pragmatic, encode_task_allocation, decode_pragmatic_simple
+} from './pkg/aill.js';
+
+try {
+  await init();
+
+  // Patch protocol functions with spec-compliant WASM implementations
+  AILL.encodeString = (msg) => encode_string(msg);
+  AILL.encodeURL = (url) => encode_url(url);
+  AILL.encodeContent = (type, content) => encode_content(type, content);
+  AILL.decode = (bytes) => {
+    try {
+      const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      return decode_simple(data);
+    } catch(e) { return null; }
+  };
+  AILL.crc8 = (data) => {
+    const arr = data instanceof Uint8Array ? data : new Uint8Array(data);
+    return crc8_compute(arr);
+  };
+  AILL.hexDump = (data, maxBytes = 128) => {
+    const arr = data instanceof Uint8Array ? data : new Uint8Array(data);
+    return hex_dump(arr, maxBytes);
+  };
+  AILL.MNEMONICS = get_mnemonics();
+
+  // Add WASM-only functions
+  AILL.prettyPrint = (data) => {
+    const arr = data instanceof Uint8Array ? data : new Uint8Array(data);
+    return pretty_print_bytes(arr);
+  };
+  AILL.decodeAST = (data) => {
+    const arr = data instanceof Uint8Array ? data : new Uint8Array(data);
+    return decode_ast(arr);
+  };
+  AILL.mnemonicFor = mnemonic_for;
+  AILL.validateEpoch = (data) => {
+    const arr = data instanceof Uint8Array ? data : new Uint8Array(data);
+    return validate_epoch(arr);
+  };
+
+  // Negotiation protocol functions (WASM-only — no JS fallback needed)
+  AILL.encodePragmatic = (act, topic, content, agentIdArr) => {
+    const id = agentIdArr instanceof Uint8Array ? agentIdArr : new Uint8Array(agentIdArr);
+    return encode_pragmatic(act, topic, content, id);
+  };
+  AILL.encodeTaskAllocation = (taskId, role, agentIdArr) => {
+    const id = agentIdArr instanceof Uint8Array ? agentIdArr : new Uint8Array(agentIdArr);
+    return encode_task_allocation(taskId, role, id);
+  };
+  AILL.decodePragmatic = (data) => {
+    const arr = data instanceof Uint8Array ? data : new Uint8Array(data);
+    return decode_pragmatic_simple(arr);
+  };
+
+  // Enhance Protocol Inspector with real AST pretty-printer
+  window.inspectEncode = function() {
+    const input = document.getElementById('inspectInput');
+    const text = input ? input.value.trim() : '';
+    if (!text) return;
+
+    const isURL = /^https?:\/\//i.test(text);
+    const wire = isURL ? AILL.encodeURL(text) : AILL.encodeString(text);
+
+    // Hex view (WASM)
+    const hexEl = document.getElementById('hexView');
+    if (hexEl) hexEl.innerHTML = AILL.hexDump(wire);
+
+    // AST view — use real spec-compliant pretty-printer
+    const astEl = document.getElementById('astView');
+    if (astEl) {
+      try {
+        const prettyText = AILL.prettyPrint(wire);
+        const crcVal = AILL.crc8(wire);
+        const header = `<span style="color:var(--accent)">AILL Wire Format</span> (${wire.length} bytes, CRC-8: 0x${crcVal.toString(16).toUpperCase().padStart(2,'0')})\n\n`;
+        // Syntax-highlight the pretty-printed AST
+        const highlighted = prettyText
+          .replace(/^(\s*)(UTTERANCE|ASSERT|QUERY|COMMAND|REQUEST|WARN|ACKNOWLEDGE|GREET|FAREWELL|PROPOSE|ACCEPT|REJECT)/gm,
+            '$1<span style="color:var(--accent)">$2</span>')
+          .replace(/^(\s*)(STRUCT|LIST|MAP|FIELD_ID|BEGIN_\w+|END_\w+)/gm,
+            '$1<span style="color:var(--yellow)">$2</span>')
+          .replace(/^(\s*)(OBSERVED|INFERRED|PREDICTED|CERTAIN|PROBABLE|POSSIBLE)/gm,
+            '$1<span style="color:var(--blue)">$2</span>')
+          .replace(/^(\s*)(PAST|PRESENT|FUTURE)/gm,
+            '$1<span style="color:var(--blue)">$2</span>')
+          .replace(/(confidence|priority|timestamp|meta)/gi,
+            '<span style="color:var(--text2)">$1</span>')
+          .replace(/("(?:[^"\\]|\\.)*")/g,
+            '<span style="color:#98c379">$1</span>')
+          .replace(/\b(\d+(?:\.\d+)?)\b/g,
+            '<span style="color:#d19a66">$1</span>');
+        astEl.innerHTML = header + highlighted;
+      } catch(e) {
+        // Fallback to byte-by-byte annotation
+        const lines = [];
+        lines.push(`<span style="color:var(--accent)">Utterance</span> (${wire.length} bytes, CRC-8: 0x${AILL.crc8(wire).toString(16).toUpperCase().padStart(2,'0')})`);
+        lines.push('');
+        let pos = 0;
+        while (pos < wire.length) {
+          const byte = wire[pos];
+          const mnem = AILL.MNEMONICS[byte];
+          if (mnem) {
+            lines.push(`  <span style="color:var(--blue)">0x${byte.toString(16).padStart(2,'0')}</span>  <span style="color:var(--accent)">${mnem}</span>`);
+          } else {
+            lines.push(`  <span style="color:var(--blue)">0x${byte.toString(16).padStart(2,'0')}</span>  <span style="color:var(--text2)">data</span>`);
+          }
+          pos++;
+        }
+        astEl.innerHTML = lines.join('\n');
+      }
+    }
+  };
+
+  addLog('info', 'WASM module loaded — using spec-compliant Rust encoder/decoder');
+  // Re-render to pick up WASM MNEMONICS if on inspector tab
+  if (activeTab === 'inspector') renderTab();
+
+} catch(e) {
+  console.warn('WASM load failed, using JS fallback:', e);
+  addLog('warn', 'WASM unavailable — using JS fallback encoder/decoder');
+}
 </script>
 </body>
 </html>
