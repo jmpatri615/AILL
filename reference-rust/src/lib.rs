@@ -8,7 +8,7 @@ pub mod decoder;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
-#[cfg(feature = "audio")]
+#[cfg(feature = "audio-core")]
 pub mod audio;
 
 // Re-exports for convenience

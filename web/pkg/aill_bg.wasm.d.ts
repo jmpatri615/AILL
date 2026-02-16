@@ -1,6 +1,9 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const acoustic_decode: (a: number, b: number, c: number) => [number, number, number, number];
+export const acoustic_duration: (a: number) => number;
+export const acoustic_encode: (a: number, b: number, c: number) => [number, number, number, number];
 export const crc8_compute: (a: number, b: number) => number;
 export const decode_ast: (a: number, b: number) => [number, number, number];
 export const decode_pragmatic_simple: (a: number, b: number) => any;

@@ -8,8 +8,10 @@ license = "MIT"
 [features]
 default = []
 wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen", "dep:js-sys"]
-audio = ["dep:hound", "dep:rustfft"]
+audio-core = ["dep:rustfft"]
+audio = ["audio-core", "dep:hound"]
 audio-live = ["audio", "dep:cpal"]
+wasm-audio = ["wasm", "audio-core"]
 
 [dependencies]
 half = "2"

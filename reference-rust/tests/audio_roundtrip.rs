@@ -1,9 +1,8 @@
-#![cfg(feature = "audio")]
+#![cfg(feature = "audio-core")]
 
 use aill::audio::{
     AcousticDecoder, AcousticEncoder,
     constants::*,
-    read_wav, write_wav,
 };
 use aill::{AILLEncoder, EpochBuilder};
 
@@ -71,29 +70,6 @@ fn test_44100hz_sample_rate() {
 }
 
 #[test]
-fn test_wav_file_roundtrip() {
-    let path = "/tmp/aill_audio_roundtrip_test.wav";
-    let original = vec![0x42, 0x13, 0xAB, 0xFF, 0x01];
-
-    let encoder = AcousticEncoder::new();
-    let audio = encoder.encode(&original).unwrap();
-
-    write_wav(path, &audio.samples, audio.sample_rate).unwrap();
-    let (samples, sr) = read_wav(path).unwrap();
-    assert_eq!(sr, audio.sample_rate);
-
-    let decoder = AcousticDecoder::new();
-    let recovered = decoder.decode(&samples).unwrap();
-    assert_eq!(
-        recovered, original,
-        "WAV round-trip failed:\n  original:  {:02X?}\n  recovered: {:02X?}",
-        original, recovered
-    );
-
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
 fn test_duration_formula() {
     let encoder = AcousticEncoder::new();
     for len in [1, 5, 10, 50] {
@@ -128,4 +104,36 @@ fn test_epoch_wrapped_roundtrip() {
         "Epoch round-trip failed:\n  original:  {:02X?}\n  recovered: {:02X?}",
         epoch_bytes, recovered
     );
+}
+
+// WAV tests require the full `audio` feature (hound dependency)
+#[cfg(feature = "audio")]
+mod wav_tests {
+    use aill::audio::{
+        AcousticDecoder, AcousticEncoder,
+        read_wav, write_wav,
+    };
+
+    #[test]
+    fn test_wav_file_roundtrip() {
+        let path = "/tmp/aill_audio_roundtrip_test.wav";
+        let original = vec![0x42, 0x13, 0xAB, 0xFF, 0x01];
+
+        let encoder = AcousticEncoder::new();
+        let audio = encoder.encode(&original).unwrap();
+
+        write_wav(path, &audio.samples, audio.sample_rate).unwrap();
+        let (samples, sr) = read_wav(path).unwrap();
+        assert_eq!(sr, audio.sample_rate);
+
+        let decoder = AcousticDecoder::new();
+        let recovered = decoder.decode(&samples).unwrap();
+        assert_eq!(
+            recovered, original,
+            "WAV round-trip failed:\n  original:  {:02X?}\n  recovered: {:02X?}",
+            original, recovered
+        );
+
+        std::fs::remove_file(path).ok();
+    }
 }

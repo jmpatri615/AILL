@@ -386,6 +386,46 @@ pub fn mnemonic_for(code: u8) -> String {
     base::mnemonic_for(code).to_string()
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Acoustic encoding/decoding (requires audio-core feature)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "audio-core")]
+use crate::audio::{AcousticEncoder, AcousticDecoder, constants};
+
+/// Encode AILL wire-format bytes into f32 PCM audio samples.
+/// Returns a Float32Array of mono PCM samples.
+/// If sample_rate is 0, defaults to 48000 Hz.
+#[cfg(feature = "audio-core")]
+#[wasm_bindgen]
+pub fn acoustic_encode(wire_bytes: &[u8], sample_rate: u32) -> Result<Vec<f32>, JsError> {
+    let sr = if sample_rate == 0 { constants::DEFAULT_SAMPLE_RATE } else { sample_rate };
+    let encoder = AcousticEncoder::with_sample_rate(sr);
+    let audio = encoder.encode(wire_bytes)
+        .map_err(|e| JsError::new(&format!("Acoustic encode error: {}", e)))?;
+    Ok(audio.samples)
+}
+
+/// Decode f32 PCM audio samples back into AILL wire-format bytes.
+/// Takes a Float32Array of mono PCM samples.
+/// If sample_rate is 0, defaults to 48000 Hz.
+#[cfg(feature = "audio-core")]
+#[wasm_bindgen]
+pub fn acoustic_decode(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, JsError> {
+    let sr = if sample_rate == 0 { constants::DEFAULT_SAMPLE_RATE } else { sample_rate };
+    let decoder = AcousticDecoder::with_sample_rate(sr);
+    let bytes = decoder.decode(samples)
+        .map_err(|e| JsError::new(&format!("Acoustic decode error: {}", e)))?;
+    Ok(bytes)
+}
+
+/// Calculate the duration in seconds for encoding a given number of bytes.
+#[cfg(feature = "audio-core")]
+#[wasm_bindgen]
+pub fn acoustic_duration(num_bytes: usize) -> f32 {
+    constants::SYNC_DURATION + (num_bytes as f32 * 2.0 * constants::FRAME_TIME) + constants::END_DURATION
+}
+
 /// Validate CRC of wire-format bytes (epoch format).
 #[wasm_bindgen]
 pub fn validate_epoch(data: &[u8]) -> bool {

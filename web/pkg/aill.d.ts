@@ -2,6 +2,25 @@
 /* eslint-disable */
 
 /**
+ * Decode f32 PCM audio samples back into AILL wire-format bytes.
+ * Takes a Float32Array of mono PCM samples.
+ * If sample_rate is 0, defaults to 48000 Hz.
+ */
+export function acoustic_decode(samples: Float32Array, sample_rate: number): Uint8Array;
+
+/**
+ * Calculate the duration in seconds for encoding a given number of bytes.
+ */
+export function acoustic_duration(num_bytes: number): number;
+
+/**
+ * Encode AILL wire-format bytes into f32 PCM audio samples.
+ * Returns a Float32Array of mono PCM samples.
+ * If sample_rate is 0, defaults to 48000 Hz.
+ */
+export function acoustic_encode(wire_bytes: Uint8Array, sample_rate: number): Float32Array;
+
+/**
  * Compute CRC-8 of data. Equivalent to JS `AILL.crc8(data)`.
  */
 export function crc8_compute(data: Uint8Array): number;
@@ -88,6 +107,9 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly acoustic_decode: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly acoustic_duration: (a: number) => number;
+    readonly acoustic_encode: (a: number, b: number, c: number) => [number, number, number, number];
     readonly crc8_compute: (a: number, b: number) => number;
     readonly decode_ast: (a: number, b: number) => [number, number, number];
     readonly decode_pragmatic_simple: (a: number, b: number) => any;

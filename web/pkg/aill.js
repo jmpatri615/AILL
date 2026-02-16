@@ -1,6 +1,56 @@
 /* @ts-self-types="./aill.d.ts" */
 
 /**
+ * Decode f32 PCM audio samples back into AILL wire-format bytes.
+ * Takes a Float32Array of mono PCM samples.
+ * If sample_rate is 0, defaults to 48000 Hz.
+ * @param {Float32Array} samples
+ * @param {number} sample_rate
+ * @returns {Uint8Array}
+ */
+export function acoustic_decode(samples, sample_rate) {
+    const ptr0 = passArrayF32ToWasm0(samples, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.acoustic_decode(ptr0, len0, sample_rate);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Calculate the duration in seconds for encoding a given number of bytes.
+ * @param {number} num_bytes
+ * @returns {number}
+ */
+export function acoustic_duration(num_bytes) {
+    const ret = wasm.acoustic_duration(num_bytes);
+    return ret;
+}
+
+/**
+ * Encode AILL wire-format bytes into f32 PCM audio samples.
+ * Returns a Float32Array of mono PCM samples.
+ * If sample_rate is 0, defaults to 48000 Hz.
+ * @param {Uint8Array} wire_bytes
+ * @param {number} sample_rate
+ * @returns {Float32Array}
+ */
+export function acoustic_encode(wire_bytes, sample_rate) {
+    const ptr0 = passArray8ToWasm0(wire_bytes, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.acoustic_encode(ptr0, len0, sample_rate);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v2;
+}
+
+/**
  * Compute CRC-8 of data. Equivalent to JS `AILL.crc8(data)`.
  * @param {Uint8Array} data
  * @returns {number}
@@ -321,6 +371,11 @@ function addToExternrefTable0(obj) {
     return idx;
 }
 
+function getArrayF32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -332,6 +387,14 @@ function getDataViewMemory0() {
         cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
     }
     return cachedDataViewMemory0;
+}
+
+let cachedFloat32ArrayMemory0 = null;
+function getFloat32ArrayMemory0() {
+    if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
+        cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
+    }
+    return cachedFloat32ArrayMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -359,6 +422,13 @@ function handleError(f, args) {
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;
     getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArrayF32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getFloat32ArrayMemory0().set(arg, ptr / 4);
     WASM_VECTOR_LEN = arg.length;
     return ptr;
 }
@@ -440,6 +510,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
     cachedDataViewMemory0 = null;
+    cachedFloat32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;
