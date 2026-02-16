@@ -27,6 +27,11 @@ impl AcousticEncoder {
     }
 
     pub fn with_sample_rate(sample_rate: u32) -> Self {
+        assert!(
+            sample_rate >= MIN_SAMPLE_RATE,
+            "Sample rate {} too low (minimum {}): Nyquist must exceed highest carrier",
+            sample_rate, MIN_SAMPLE_RATE
+        );
         Self { sample_rate }
     }
 
@@ -76,7 +81,7 @@ impl AcousticEncoder {
         })
     }
 
-    /// Write a linear frequency sweep (chirp) with Hann-like envelope.
+    /// Write a linear frequency sweep (chirp) with linear attack/release envelope.
     /// Returns the sample offset after the chirp.
     fn write_chirp(
         &self,
@@ -88,8 +93,8 @@ impl AcousticEncoder {
     ) -> usize {
         let sr = self.sample_rate as f32;
         let num_samples = (duration * sr).round() as usize;
-        let attack_samples = (CHIRP_ATTACK * sr).round() as usize;
-        let release_samples = (CHIRP_RELEASE * sr).round() as usize;
+        let attack_samples = ((CHIRP_ATTACK * sr).round() as usize).max(1);
+        let release_samples = ((CHIRP_RELEASE * sr).round() as usize).max(1);
 
         for i in 0..num_samples {
             if start + i >= samples.len() {
@@ -129,8 +134,8 @@ impl AcousticEncoder {
         let sr = self.sample_rate as f32;
         let sym_samples = (SYMBOL_DURATION * sr).round() as usize;
         let frame_samples = (FRAME_TIME * sr).round() as usize;
-        let attack_samples = (TONE_ATTACK * sr).round() as usize;
-        let release_samples = (TONE_RELEASE * sr).round() as usize;
+        let attack_samples = ((TONE_ATTACK * sr).round() as usize).max(1);
+        let release_samples = ((TONE_RELEASE * sr).round() as usize).max(1);
 
         for bit in 0..BITS_PER_NIBBLE {
             if nibble & (1 << bit) == 0 {

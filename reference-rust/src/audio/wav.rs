@@ -42,12 +42,25 @@ pub fn read_wav<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, u32), AILLError> {
     let spec = reader.spec();
     let sample_rate = spec.sample_rate;
 
+    if spec.channels != 1 {
+        return Err(AILLError::InvalidStructure(format!(
+            "Expected mono WAV (1 channel), got {} channels",
+            spec.channels
+        )));
+    }
+
     let samples: Vec<f32> = match spec.sample_format {
         SampleFormat::Float => reader
             .into_samples::<f32>()
             .map(|s| s.map_err(|e| AILLError::InvalidStructure(format!("WAV sample error: {}", e))))
             .collect::<Result<Vec<f32>, _>>()?,
         SampleFormat::Int => {
+            if spec.bits_per_sample == 0 || spec.bits_per_sample > 32 {
+                return Err(AILLError::InvalidStructure(format!(
+                    "Unsupported bits_per_sample: {}",
+                    spec.bits_per_sample
+                )));
+            }
             let max_val = (1u32 << (spec.bits_per_sample - 1)) as f32;
             reader
                 .into_samples::<i32>()

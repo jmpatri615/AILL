@@ -32,6 +32,11 @@ impl AcousticDecoder {
     }
 
     pub fn with_sample_rate(sample_rate: u32) -> Self {
+        assert!(
+            sample_rate >= MIN_SAMPLE_RATE,
+            "Sample rate {} too low (minimum {}): Nyquist must exceed highest carrier",
+            sample_rate, MIN_SAMPLE_RATE
+        );
         Self { sample_rate }
     }
 
@@ -130,7 +135,7 @@ impl AcousticDecoder {
         let min_elapsed = (SYNC_MIN_ELAPSED_MS / 1000.0 * sr) as usize;
         let max_elapsed = (SYNC_MAX_ELAPSED_MS / 1000.0 * sr) as usize;
 
-        let _chirp_end_idx = hi_energies[chirp_start_idx..]
+        let chirp_end_idx = hi_energies[chirp_start_idx..]
             .iter()
             .position(|&(pos, hi)| {
                 let elapsed = pos.saturating_sub(chirp_start_pos);
@@ -141,13 +146,14 @@ impl AcousticDecoder {
                 AILLError::InvalidStructure("Could not detect sync chirp end".into())
             })?;
 
-        // Estimate when the chirp actually started in sample space.
-        // The chirp lo-band detection happens when the chirp frequency is ~300-550Hz,
-        // which is near the beginning of the chirp. The FFT window center is at pos + FFT_SIZE/2.
-        // The chirp start is approximately at chirp_start_pos.
-        //
-        // Data starts at chirp_start + SYNC_DURATION (the full chirp length).
-        let data_start = chirp_start_pos + (SYNC_DURATION * sr).round() as usize;
+        // Use the detected chirp end position for a more accurate data_start.
+        // The hi-band detection fires when the chirp sweeps through 1400-1900Hz,
+        // which is near the end of the chirp. Add a small margin for the chirp
+        // to finish and the guard silence before the first data symbol.
+        let chirp_end_pos = hi_energies[chirp_end_idx].0 + FFT_SIZE / 2;
+        let sync_based = chirp_start_pos + (SYNC_DURATION * sr).round() as usize;
+        // Use the later of the two estimates to avoid overlapping with the chirp tail
+        let data_start = sync_based.max(chirp_end_pos);
 
         Ok(data_start)
     }
@@ -185,13 +191,23 @@ impl AcousticDecoder {
         }
 
         all_mags.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let len = all_mags.len();
 
-        let median = all_mags[all_mags.len() / 2];
-        let p85 = all_mags[(all_mags.len() as f32 * 0.85) as usize];
+        let median = all_mags[len / 2];
+        let p85 = all_mags[(len as f32 * 0.85).min((len - 1) as f32) as usize];
 
-        // Threshold separating inactive carriers (noise/leakage) from active carriers
-        if p85 > median * 3.0 {
-            (median + p85) / 4.0
+        // Threshold separating inactive carriers (noise/leakage) from active carriers.
+        // With bimodal data (active vs inactive carriers), median lands in the low
+        // cluster and p85 in the high cluster. The threshold is placed between them.
+        // For sparse or uniform data (e.g., all-zero bytes), p85 won't separate
+        // well from median, so we fall back to ABS_THRESHOLD.
+        if p85 > median * 3.0 && median > 0.0 {
+            // Geometric mean of median and p85, biased toward median to avoid
+            // false positives from spectral leakage
+            (median * 2.0 + p85) / 4.0
+        } else if p85 > ABS_THRESHOLD * 2.0 {
+            // Some signal present but distribution is tight — use fraction of p85
+            p85 * 0.4
         } else {
             ABS_THRESHOLD
         }
@@ -204,6 +220,13 @@ impl AcousticDecoder {
     /// 1. Scan all frames, recording detected tones and marking silent slots
     /// 2. Determine data extent from first frame to end chirp (or end of audio)
     /// 3. Assign hi/lo half by position parity; silent slots get nibble value 0
+    ///
+    /// NOTE: Silent nibble handling diverges from the JS web demo protocol.
+    /// The JS real-time decoder skips frames with no detected tones and relies on
+    /// timing to re-sync. This offline decoder instead assigns silent frames a
+    /// nibble value of 0 based on position parity (even=Hi, odd=Lo), which is
+    /// correct for the encoder's output (0x00 nibbles produce silence) but may
+    /// differ in behavior for degraded or noisy signals.
     fn decode_symbols_fixed(
         &self,
         samples: &[f32],
@@ -219,7 +242,7 @@ impl AcousticDecoder {
         // Pass 1: Analyze all frame positions, detect tones and end chirp
         let mut frame_results: Vec<Option<Symbol>> = Vec::new();
 
-        for n in 0..1000 {
+        for n in 0..MAX_DECODE_FRAMES {
             let center = data_start + n * frame_samples + sym_center_offset;
             let start = center.saturating_sub(FFT_SIZE / 2);
             if start + FFT_SIZE > samples.len() {

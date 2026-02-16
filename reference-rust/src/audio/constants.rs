@@ -77,6 +77,15 @@ pub const TONE_THRESHOLD_RATIO: f32 = 2.0;
 /// Default sample rate.
 pub const DEFAULT_SAMPLE_RATE: u32 = 48000;
 
+/// Minimum supported sample rate. Below this, carrier frequencies cannot
+/// be represented (Nyquist must exceed the highest carrier + margin).
+pub const MIN_SAMPLE_RATE: u32 = 4000;
+
+/// Maximum number of symbol frames the decoder will scan before stopping.
+/// Each byte produces 2 frames (hi + lo nibble), so this allows up to
+/// MAX_DECODE_FRAMES / 2 = 500 bytes.
+pub const MAX_DECODE_FRAMES: usize = 1000;
+
 // ── Decoder sync detection bands ──
 
 pub const SYNC_LO_BAND: (f32, f32) = (250.0, 550.0);
