@@ -804,6 +804,7 @@ const AILLReceiver = (() => {
   let onLogCb = null;
   let onStateCb = null;
   let frameId = null;  // setInterval ID (not requestAnimationFrame — avoids background tab throttling)
+  let txBusyUntil = 0; // TX guard: skip receiver processing during own transmissions
 
   // Receiver state
   let receivedSymbols = [];
@@ -880,8 +881,11 @@ const AILLReceiver = (() => {
     source.connect(micAnalyser);
     // NOT connected to destination — prevents feedback
 
-    // PCM capture via ScriptProcessorNode for Rust decoder
-    if (AILL._hasAcousticWasm) {
+    // PCM capture via ScriptProcessorNode for Rust WASM decoder
+    if (!AILL._hasAcousticWasm) {
+      log('warn', 'Rust WASM acoustic module not loaded — decoding will not work');
+    }
+    {
       pcmRingBuffer = new Float32Array(PCM_RING_SIZE);
       pcmWritePos = 0;
       pcmCapturing = false;
@@ -935,6 +939,9 @@ const AILLReceiver = (() => {
 
   function processFrame() {
     if (!listening || !micAnalyser) return;
+    // Skip receiver processing during own transmissions to avoid
+    // blocking the main thread with WASM decode of self-echo audio
+    if (performance.now() < txBusyUntil) return;
 
     const freqData = new Uint8Array(micAnalyser.frequencyBinCount);
     micAnalyser.getByteFrequencyData(freqData);
@@ -1064,64 +1071,54 @@ const AILLReceiver = (() => {
       return;
     }
 
-    log('rx', `Received ${receivedSymbols.length} tone symbols, reassembling...`);
+    log('rx', `Received ${receivedSymbols.length} tone symbols, decoding PCM with Rust...`);
 
-    // Try Rust decoder on captured PCM first
     let wire = null;
-    let usedRust = false;
-    if (AILL._hasAcousticWasm && pcmRingBuffer && capturedPcm.length > 0) {
-      try {
-        // Build full PCM: pre-buffer from ring + captured chunks
-        const preLen = Math.max(0, pcmWritePos - pcmSyncStart);
-        const preStart = Math.max(0, pcmSyncStart);
-        // Extract pre-buffer from ring buffer
-        const preSamples = [];
-        for (let p = preStart; p < preStart + Math.min(preLen, PCM_RING_SIZE); p++) {
-          preSamples.push(pcmRingBuffer[p % PCM_RING_SIZE]);
-        }
-        // Total length
-        let totalLen = preSamples.length;
-        for (const chunk of capturedPcm) totalLen += chunk.length;
-        const fullPcm = new Float32Array(totalLen);
-        fullPcm.set(preSamples, 0);
-        let offset = preSamples.length;
-        for (const chunk of capturedPcm) {
-          fullPcm.set(chunk, offset);
-          offset += chunk.length;
-        }
-        const rustBytes = AILL.acousticDecode(fullPcm, micCtx.sampleRate);
-        if (rustBytes && rustBytes.length > 0) {
-          wire = rustBytes;
-          usedRust = true;
-          log('rx', `Rust decoded ${wire.length} bytes from ${fullPcm.length} PCM samples`);
-        }
-      } catch (e) {
-        log('warn', `Rust decode failed (${e.message}), using JS fallback`);
+    if (!pcmRingBuffer || capturedPcm.length === 0) {
+      log('warn', 'No PCM data captured — cannot decode');
+      capturedPcm = [];
+      receivedSymbols = [];
+      symbolCount = 0;
+      return;
+    }
+
+    try {
+      // Build full PCM: pre-buffer from ring + captured chunks
+      const preLen = Math.max(0, pcmWritePos - pcmSyncStart);
+      const preStart = Math.max(0, pcmSyncStart);
+      const preSamples = [];
+      for (let p = preStart; p < preStart + Math.min(preLen, PCM_RING_SIZE); p++) {
+        preSamples.push(pcmRingBuffer[p % PCM_RING_SIZE]);
       }
+      let totalLen = preSamples.length;
+      for (const chunk of capturedPcm) totalLen += chunk.length;
+      const fullPcm = new Float32Array(totalLen);
+      fullPcm.set(preSamples, 0);
+      let offset = preSamples.length;
+      for (const chunk of capturedPcm) {
+        fullPcm.set(chunk, offset);
+        offset += chunk.length;
+      }
+      const rustBytes = AILL.acousticDecode(fullPcm, micCtx.sampleRate);
+      if (rustBytes && rustBytes.length > 0) {
+        wire = rustBytes;
+        log('rx', `Rust decoded ${wire.length} bytes from ${fullPcm.length} PCM samples`);
+      } else {
+        log('warn', 'Rust decoder returned no bytes');
+      }
+    } catch (e) {
+      log('warn', `Rust decode failed: ${e.message}`);
     }
     capturedPcm = [];
 
-    // JS fallback: reconstruct bytes from hi/lo nibble pairs
     if (!wire) {
-      const bytes = [];
-      let i = 0;
-      while (i < receivedSymbols.length - 1) {
-        const s1 = receivedSymbols[i], s2 = receivedSymbols[i + 1];
-        if (s1.half === 'hi' && s2.half === 'lo') {
-          bytes.push((s1.value << 4) | s2.value);
-          i += 2;
-        } else if (s1.half === 'lo' && s2.half === 'hi') {
-          bytes.push((s2.value << 4) | s1.value);
-          i += 2;
-        } else {
-          i++; // skip mismatched symbol
-        }
-      }
-      wire = new Uint8Array(bytes);
+      receivedSymbols = [];
+      symbolCount = 0;
+      return;
     }
 
     const hexPreview = Array.from(wire.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ');
-    log('rx', `${usedRust ? 'Rust' : 'JS'} decoded ${wire.length} bytes: ${hexPreview}${wire.length > 20 ? ' ...' : ''}`);
+    log('rx', `Decoded ${wire.length} bytes: ${hexPreview}${wire.length > 20 ? ' ...' : ''}`);
     log('rx', `CRC-8: 0x${AILL.crc8(wire).toString(16).toUpperCase().padStart(2, '0')}`);
 
     const decoded = AILL.decode(wire);
@@ -1139,7 +1136,9 @@ const AILLReceiver = (() => {
   function getAnalyser() { return micAnalyser; }
   function getCtx() { return micCtx; }
 
-  return { start, stop, isListening: () => listening, getState: () => state, getAnalyser, getCtx };
+  function setTxGuard(durationMs) { txBusyUntil = performance.now() + durationMs; }
+
+  return { start, stop, isListening: () => listening, getState: () => state, getAnalyser, getCtx, setTxGuard };
 })();
 
 
@@ -1194,7 +1193,7 @@ const Conversations = (() => {
   const TOPICS = {
     status_exchange: {
       name: "Status Exchange",
-      duration: 15,  // seconds
+      duration: 120,  // seconds
       roles: ['coordinator', 'sensor', 'actuator', 'observer'],
       // Each role's message generator (returns AILL-encodable content string)
       messages: {
@@ -1206,7 +1205,7 @@ const Conversations = (() => {
     },
     navigation: {
       name: "Navigation Swarm",
-      duration: 20,
+      duration: 120,
       roles: ['navigator', 'scout', 'relay', 'anchor'],
       messages: {
         navigator: (seq) => `nav:heading=${(Math.random()*360).toFixed(1)} speed=${(1+Math.random()*5).toFixed(1)}`,
@@ -1284,6 +1283,8 @@ function ensureAudioCtx() {
 }
 
 // Play Rust-generated PCM samples via AudioBufferSourceNode
+let activeSources = [];
+
 function playPCM(ctx, pcmSamples, sampleRate, gainLevel = 1.0) {
   const buffer = ctx.createBuffer(1, pcmSamples.length, sampleRate);
   buffer.getChannelData(0).set(pcmSamples);
@@ -1297,19 +1298,37 @@ function playPCM(ctx, pcmSamples, sampleRate, gainLevel = 1.0) {
   } else {
     gainNode.connect(ctx.destination);
   }
+  source.onended = () => {
+    activeSources = activeSources.filter(s => s !== source);
+  };
+  activeSources.push(source);
   source.start();
   return source;
 }
+
+function stopAllAudio() {
+  for (const source of activeSources) {
+    try { source.stop(); } catch (_) {}
+  }
+  activeSources = [];
+}
+
+let logUpdatePending = false;
+let protoLogUpdatePending = false;
 
 function addLog(type, msg) {
   const now = new Date();
   const ts = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}.${now.getMilliseconds().toString().padStart(3,'0')}`;
   logLines.push({ ts, type, msg });
   if (logLines.length > 200) logLines = logLines.slice(-150);
-  updateLogConsole();
+  if (!logUpdatePending) {
+    logUpdatePending = true;
+    requestAnimationFrame(updateLogConsole);
+  }
 }
 
 function updateLogConsole() {
+  logUpdatePending = false;
   const el = document.getElementById('logConsole');
   if (!el) return;
   el.innerHTML = logLines.slice(-50).map(l =>
@@ -1342,7 +1361,10 @@ function addProtoLog(from, act, topic, content) {
   const short = from === agentIdHex ? 'self' : from.slice(0,8);
   negotiation.protocolLog.push({ time: Date.now(), from: short, act, topic, content });
   if (negotiation.protocolLog.length > 100) negotiation.protocolLog.splice(0, 50);
-  updateProtoLogUI();
+  if (!protoLogUpdatePending) {
+    protoLogUpdatePending = true;
+    requestAnimationFrame(updateProtoLogUI);
+  }
 }
 
 function updateNegUI() {
@@ -1353,6 +1375,7 @@ function updateNegUI() {
 }
 
 function updateProtoLogUI() {
+  protoLogUpdatePending = false;
   const el = document.getElementById('protoLog');
   if (!el) return;
   el.innerHTML = negotiation.protocolLog.slice(-30).map(p =>
@@ -1452,9 +1475,13 @@ function renderSinging() {
 
 function negTransmit(wireData, label) {
   const ctx = ensureAudioCtx();
+  // Tell receiver to ignore audio during our transmission (avoids
+  // expensive WASM decode of self-echo that blocks the main thread)
+  const txDurationMs = AILL.acousticDuration(wireData.length) * 1000 + 300;
+  AILLReceiver.setTxGuard(txDurationMs);
+
   if (AILL._hasAcousticWasm) {
     const pcm = AILL.acousticEncode(wireData, ctx.sampleRate);
-    // Rust PCM has MASTER_GAIN=0.15 baked in; scale down further during playback
     const gainLevel = negotiation.state === 'PLAYING' ? 0.2 : 1.0;
     playPCM(ctx, pcm, ctx.sampleRate, gainLevel);
   } else {
@@ -1700,7 +1727,8 @@ function stopNegotiation() {
   if (negotiation.discoveryTimer) { clearTimeout(negotiation.discoveryTimer); negotiation.discoveryTimer = null; }
   if (negotiation.votingTimer) { clearTimeout(negotiation.votingTimer); negotiation.votingTimer = null; }
 
-  // Stop listening
+  // Stop all in-flight audio and listening
+  stopAllAudio();
   stopNegotiationListener();
 
   negotiation.state = 'IDLE';
@@ -2020,6 +2048,9 @@ async function transmitContent() {
   const btn = document.getElementById('btnTransmit');
   if (btn) btn.disabled = true;
 
+  // Tell receiver to skip during our transmission
+  AILLReceiver.setTxGuard(duration * 1000 + 300);
+
   // Play the tones through speakers + broadcast to other tabs
   if (AILL._hasAcousticWasm) {
     const pcm = AILL.acousticEncode(wire, ctx.sampleRate);
@@ -2208,13 +2239,14 @@ function inspectPlay() {
   let duration;
   if (AILL._hasAcousticWasm) {
     const pcm = AILL.acousticEncode(wire, ctx.sampleRate);
-    playPCM(ctx, pcm, ctx.sampleRate, 0.67);
     duration = AILL.acousticDuration(wire.length);
+    playPCM(ctx, pcm, ctx.sampleRate, 0.67);
   } else {
     const tones = AILL.encodeToTones(wire);
-    AILL.playTones(ctx, tones, ctx.currentTime + 0.05, 0.1);
     duration = AILL.calcDuration(wire);
+    AILL.playTones(ctx, tones, ctx.currentTime + 0.05, 0.1);
   }
+  AILLReceiver.setTxGuard(duration * 1000 + 300);
   AILLBroadcast.send(wire);
   startVisualizations();
   setTimeout(() => stopVisualizations(), duration * 1000 + 500);

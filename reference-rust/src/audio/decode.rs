@@ -221,12 +221,11 @@ impl AcousticDecoder {
     /// 2. Determine data extent from first frame to end chirp (or end of audio)
     /// 3. Assign hi/lo half by position parity; silent slots get nibble value 0
     ///
-    /// NOTE: Silent nibble handling diverges from the JS web demo protocol.
-    /// The JS real-time decoder skips frames with no detected tones and relies on
-    /// timing to re-sync. This offline decoder instead assigns silent frames a
-    /// nibble value of 0 based on position parity (even=Hi, odd=Lo), which is
-    /// correct for the encoder's output (0x00 nibbles produce silence) but may
-    /// differ in behavior for degraded or noisy signals.
+    /// Silent nibble handling: silent frames are assigned nibble value 0 with
+    /// Hi/Lo determined by position parity. This is correct because the encoder
+    /// produces silence for nibble value 0, so a silent frame at a known grid
+    /// position IS a 0x0 nibble. The web demo delegates all decoding to this
+    /// Rust implementation via WASM.
     fn decode_symbols_fixed(
         &self,
         samples: &[f32],
