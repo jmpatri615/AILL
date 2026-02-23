@@ -114,3 +114,10 @@ pub const MAX_SILENCE_MS: f32 = 250.0;
 
 /// Minimum symbols for a valid reception.
 pub const MIN_SYMBOLS: usize = 4;
+
+// ── Encoder limits ──
+
+/// Maximum number of wire bytes the encoder will accept.
+/// Prevents runaway memory allocation for very large inputs.
+/// 10 000 bytes → ~1200 s of audio → ~57 M samples (~230 MB).
+pub const MAX_ENCODE_BYTES: usize = 10_000;

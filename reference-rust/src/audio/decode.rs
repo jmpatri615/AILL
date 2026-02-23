@@ -190,7 +190,7 @@ impl AcousticDecoder {
             return ABS_THRESHOLD;
         }
 
-        all_mags.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        all_mags.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let len = all_mags.len();
 
         let median = all_mags[len / 2];

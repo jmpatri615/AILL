@@ -40,6 +40,13 @@ impl AcousticEncoder {
         if wire_bytes.is_empty() {
             return Err(AILLError::EncoderError("Empty input".into()));
         }
+        if wire_bytes.len() > MAX_ENCODE_BYTES {
+            return Err(AILLError::EncoderError(format!(
+                "Input too large ({} bytes, maximum {})",
+                wire_bytes.len(),
+                MAX_ENCODE_BYTES
+            )));
+        }
 
         let sr = self.sample_rate as f32;
         let duration = SYNC_DURATION + (wire_bytes.len() as f32 * 2.0 * FRAME_TIME) + END_DURATION;
