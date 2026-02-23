@@ -16,9 +16,9 @@ fn roundtrip(wire_bytes: &[u8]) -> Vec<u8> {
 
 /// Helper: encode wire bytes → PCM → decode back, at a given sample rate.
 fn roundtrip_at(wire_bytes: &[u8], sample_rate: u32) -> Vec<u8> {
-    let encoder = AcousticEncoder::with_sample_rate(sample_rate);
+    let encoder = AcousticEncoder::with_sample_rate(sample_rate).unwrap();
     let audio = encoder.encode(wire_bytes).unwrap();
-    let decoder = AcousticDecoder::with_sample_rate(sample_rate);
+    let decoder = AcousticDecoder::with_sample_rate(sample_rate).unwrap();
     decoder.decode(&audio.samples).unwrap()
 }
 

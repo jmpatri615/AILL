@@ -26,13 +26,14 @@ impl AcousticEncoder {
         }
     }
 
-    pub fn with_sample_rate(sample_rate: u32) -> Self {
-        assert!(
-            sample_rate >= MIN_SAMPLE_RATE,
-            "Sample rate {} too low (minimum {}): Nyquist must exceed highest carrier",
-            sample_rate, MIN_SAMPLE_RATE
-        );
-        Self { sample_rate }
+    pub fn with_sample_rate(sample_rate: u32) -> Result<Self, AILLError> {
+        if sample_rate < MIN_SAMPLE_RATE {
+            return Err(AILLError::EncoderError(format!(
+                "Sample rate {} too low (minimum {}): Nyquist must exceed highest carrier",
+                sample_rate, MIN_SAMPLE_RATE
+            )));
+        }
+        Ok(Self { sample_rate })
     }
 
     /// Encode wire bytes into PCM audio.

@@ -33,6 +33,9 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Blocks until all samples have been played, then drops the stream.
 /// Returns an error if no output device is available or the stream fails.
 pub fn play_audio(samples: &[f32], sample_rate: u32) -> Result<(), AILLError> {
+    if samples.is_empty() {
+        return Err(AILLError::EncoderError("No audio samples to play".into()));
+    }
     if sample_rate == 0 {
         return Err(AILLError::EncoderError("Sample rate must be > 0".into()));
     }

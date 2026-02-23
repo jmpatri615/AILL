@@ -400,7 +400,8 @@ use crate::audio::{AcousticEncoder, AcousticDecoder, constants};
 #[wasm_bindgen]
 pub fn acoustic_encode(wire_bytes: &[u8], sample_rate: u32) -> Result<Vec<f32>, JsError> {
     let sr = if sample_rate == 0 { constants::DEFAULT_SAMPLE_RATE } else { sample_rate };
-    let encoder = AcousticEncoder::with_sample_rate(sr);
+    let encoder = AcousticEncoder::with_sample_rate(sr)
+        .map_err(|e| JsError::new(&format!("Acoustic encode error: {}", e)))?;
     let audio = encoder.encode(wire_bytes)
         .map_err(|e| JsError::new(&format!("Acoustic encode error: {}", e)))?;
     Ok(audio.samples)
@@ -413,7 +414,8 @@ pub fn acoustic_encode(wire_bytes: &[u8], sample_rate: u32) -> Result<Vec<f32>, 
 #[wasm_bindgen]
 pub fn acoustic_decode(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, JsError> {
     let sr = if sample_rate == 0 { constants::DEFAULT_SAMPLE_RATE } else { sample_rate };
-    let decoder = AcousticDecoder::with_sample_rate(sr);
+    let decoder = AcousticDecoder::with_sample_rate(sr)
+        .map_err(|e| JsError::new(&format!("Acoustic decode error: {}", e)))?;
     let bytes = decoder.decode(samples)
         .map_err(|e| JsError::new(&format!("Acoustic decode error: {}", e)))?;
     Ok(bytes)

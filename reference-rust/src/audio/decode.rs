@@ -31,13 +31,14 @@ impl AcousticDecoder {
         }
     }
 
-    pub fn with_sample_rate(sample_rate: u32) -> Self {
-        assert!(
-            sample_rate >= MIN_SAMPLE_RATE,
-            "Sample rate {} too low (minimum {}): Nyquist must exceed highest carrier",
-            sample_rate, MIN_SAMPLE_RATE
-        );
-        Self { sample_rate }
+    pub fn with_sample_rate(sample_rate: u32) -> Result<Self, AILLError> {
+        if sample_rate < MIN_SAMPLE_RATE {
+            return Err(AILLError::EncoderError(format!(
+                "Sample rate {} too low (minimum {}): Nyquist must exceed highest carrier",
+                sample_rate, MIN_SAMPLE_RATE
+            )));
+        }
+        Ok(Self { sample_rate })
     }
 
     /// Decode PCM f32 samples into wire bytes.
@@ -369,6 +370,18 @@ fn get_bin_mag(magnitudes: &[f32], freq: f32, sample_rate: f32) -> f32 {
 }
 
 /// Detect which carriers are active and return a Symbol, or None if silence.
+/// Extract a nibble value from the active-carrier bitmask at the given offset.
+fn extract_nibble(active: u8, carrier_offset: usize) -> u8 {
+    let mut n: u8 = 0;
+    for b in 0..BITS_PER_NIBBLE {
+        if active & (1 << (b + carrier_offset)) != 0 {
+            n |= 1 << b;
+        }
+    }
+    n
+}
+
+/// Detect which carriers are active and return a Symbol, or None if silence.
 fn decode_tone_symbol(carrier_mags: &[f32; NUM_CARRIERS], threshold: f32) -> Option<Symbol> {
     let mut active: u8 = 0;
     let mut lo_any = false;
@@ -390,42 +403,18 @@ fn decode_tone_symbol(carrier_mags: &[f32; NUM_CARRIERS], threshold: f32) -> Opt
     }
 
     let (half, nibble) = if hi_any && !lo_any {
-        let mut n: u8 = 0;
-        for b in 0..BITS_PER_NIBBLE {
-            if active & (1 << (b + HI_CARRIER_OFFSET)) != 0 {
-                n |= 1 << b;
-            }
-        }
-        (Half::Hi, n)
+        (Half::Hi, extract_nibble(active, HI_CARRIER_OFFSET))
     } else if lo_any && !hi_any {
-        let mut n: u8 = 0;
-        for b in 0..BITS_PER_NIBBLE {
-            if active & (1 << (b + LO_CARRIER_OFFSET)) != 0 {
-                n |= 1 << b;
-            }
-        }
-        (Half::Lo, n)
+        (Half::Lo, extract_nibble(active, LO_CARRIER_OFFSET))
     } else {
         // Both bands active — pick the stronger one
         let lo_strength: f32 = carrier_mags[..4].iter().sum();
         let hi_strength: f32 = carrier_mags[4..].iter().sum();
 
         if hi_strength > lo_strength {
-            let mut n: u8 = 0;
-            for b in 0..BITS_PER_NIBBLE {
-                if active & (1 << (b + HI_CARRIER_OFFSET)) != 0 {
-                    n |= 1 << b;
-                }
-            }
-            (Half::Hi, n)
+            (Half::Hi, extract_nibble(active, HI_CARRIER_OFFSET))
         } else {
-            let mut n: u8 = 0;
-            for b in 0..BITS_PER_NIBBLE {
-                if active & (1 << (b + LO_CARRIER_OFFSET)) != 0 {
-                    n |= 1 << b;
-                }
-            }
-            (Half::Lo, n)
+            (Half::Lo, extract_nibble(active, LO_CARRIER_OFFSET))
         }
     };
 
