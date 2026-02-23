@@ -1,8 +1,11 @@
 pub mod base;
 pub mod nav;
 pub mod percept;
+pub mod manip;
+pub mod comm;
 pub mod diag;
 pub mod plan;
+pub mod safety;
 
 pub use base::*;
 
@@ -70,8 +73,26 @@ pub static PLAN1: DomainCodebook = DomainCodebook::new(
     plan::PLAN1_ENTRIES,
 );
 
+pub static MANIP1: DomainCodebook = DomainCodebook::new(
+    manip::MANIP1_REGISTRY_ID,
+    manip::MANIP1_NAME,
+    manip::MANIP1_ENTRIES,
+);
+
+pub static COMM1: DomainCodebook = DomainCodebook::new(
+    comm::COMM1_REGISTRY_ID,
+    comm::COMM1_NAME,
+    comm::COMM1_ENTRIES,
+);
+
+pub static SAFETY1: DomainCodebook = DomainCodebook::new(
+    safety::SAFETY1_REGISTRY_ID,
+    safety::SAFETY1_NAME,
+    safety::SAFETY1_ENTRIES,
+);
+
 /// All registered domain codebooks.
-pub static DOMAIN_REGISTRY: &[&DomainCodebook] = &[&NAV1, &PERCEPT1, &DIAG1, &PLAN1];
+pub static DOMAIN_REGISTRY: &[&DomainCodebook] = &[&NAV1, &PERCEPT1, &MANIP1, &COMM1, &DIAG1, &PLAN1, &SAFETY1];
 
 /// Look up a domain codebook by registry ID.
 pub fn get_domain_codebook(registry_id: u8) -> Option<&'static DomainCodebook> {

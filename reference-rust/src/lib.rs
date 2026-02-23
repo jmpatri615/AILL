@@ -20,6 +20,6 @@ pub use wire::{crc8, encode_varint, decode_varint, encode_float16, decode_float1
 pub use codebook::{
     base::{self, BASE_CODEBOOK, CodeEntry},
     DomainCodebook, DomainEntry,
-    NAV1, PERCEPT1, DIAG1, PLAN1,
+    NAV1, PERCEPT1, MANIP1, COMM1, DIAG1, PLAN1, SAFETY1,
     DOMAIN_REGISTRY, get_domain_codebook,
 };
