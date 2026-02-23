@@ -369,7 +369,6 @@ fn get_bin_mag(magnitudes: &[f32], freq: f32, sample_rate: f32) -> f32 {
     m
 }
 
-/// Detect which carriers are active and return a Symbol, or None if silence.
 /// Extract a nibble value from the active-carrier bitmask at the given offset.
 fn extract_nibble(active: u8, carrier_offset: usize) -> u8 {
     let mut n: u8 = 0;
