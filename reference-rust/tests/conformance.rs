@@ -1,7 +1,7 @@
 /// AILL Conformance Test Suite (ACTS) - Rust Port
 /// Tests the reference implementation against the specification.
 ///
-/// Port of all 35 tests from Python test_conformance.py
+/// Port of all 35 tests from Python test_conformance.py, plus 7 domain codebook tests
 
 use aill::*;
 use aill::codebook::base::temporal;
@@ -445,7 +445,7 @@ fn tg_vi_003_large_values() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// TG-CODEC: Codebook Tests (3 tests)
+// TG-CODEC: Codebook Tests (10 tests)
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -468,6 +468,95 @@ fn tg_cd_002_nav1_codebook() {
 fn tg_cd_003_diag1_codebook() {
     assert!(DIAG1.lookup(0x0000).is_some());
     assert_eq!(DIAG1.lookup(0x0000).unwrap().mnemonic, "BATTERY_LEVEL");
+}
+
+#[test]
+fn tg_cd_004_manip1_codebook() {
+    assert_eq!(MANIP1.len(), 75);
+    assert!(MANIP1.lookup(0x0000).is_some());
+    assert_eq!(MANIP1.lookup(0x0000).unwrap().mnemonic, "GRIPPER_STATE");
+    // Spot-check across sections
+    assert_eq!(MANIP1.lookup(0x0020).unwrap().mnemonic, "JOINT_POSITIONS");
+    assert_eq!(MANIP1.lookup(0x00B6).unwrap().mnemonic, "KNOT_TYPE");
+    // Invalid code returns None
+    assert!(MANIP1.lookup(0xFFFF).is_none());
+}
+
+#[test]
+fn tg_cd_005_comm1_codebook() {
+    assert_eq!(COMM1.len(), 63);
+    assert!(COMM1.lookup(0x0000).is_some());
+    assert_eq!(COMM1.lookup(0x0000).unwrap().mnemonic, "AGENT_UUID");
+    // Spot-check across sections
+    assert_eq!(COMM1.lookup(0x0020).unwrap().mnemonic, "UNICAST");
+    assert_eq!(COMM1.lookup(0x008B).unwrap().mnemonic, "EVENT_UNSUBSCRIBE");
+    // Invalid code returns None
+    assert!(COMM1.lookup(0xFFFF).is_none());
+}
+
+#[test]
+fn tg_cd_006_safety1_codebook() {
+    assert_eq!(SAFETY1.len(), 63);
+    assert!(SAFETY1.lookup(0x0000).is_some());
+    assert_eq!(SAFETY1.lookup(0x0000).unwrap().mnemonic, "EMERGENCY_LEVEL");
+    // Spot-check across sections
+    assert_eq!(SAFETY1.lookup(0x0020).unwrap().mnemonic, "HUMAN_DETECTED");
+    assert_eq!(SAFETY1.lookup(0x008B).unwrap().mnemonic, "BLACK_BOX_MARK");
+    // Invalid code returns None
+    assert!(SAFETY1.lookup(0xFFFF).is_none());
+}
+
+#[test]
+fn tg_cd_007_domain_registry_completeness() {
+    // All 7 domain codebooks should be registered
+    assert_eq!(DOMAIN_REGISTRY.len(), 7);
+    // Each has a unique registry ID
+    let mut ids: Vec<u8> = DOMAIN_REGISTRY.iter().map(|cb| cb.registry_id).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 7);
+}
+
+#[test]
+fn tg_cd_008_domain_registry_lookup() {
+    // Look up each domain codebook by registry ID
+    assert_eq!(get_domain_codebook(0x01).unwrap().name, "NAV-1");
+    assert_eq!(get_domain_codebook(0x02).unwrap().name, "PERCEPT-1");
+    assert_eq!(get_domain_codebook(0x03).unwrap().name, "MANIP-1");
+    assert_eq!(get_domain_codebook(0x04).unwrap().name, "COMM-1");
+    assert_eq!(get_domain_codebook(0x05).unwrap().name, "DIAG-1");
+    assert_eq!(get_domain_codebook(0x06).unwrap().name, "PLAN-1");
+    assert_eq!(get_domain_codebook(0x07).unwrap().name, "SAFETY-1");
+    // Invalid ID returns None
+    assert!(get_domain_codebook(0xFF).is_none());
+}
+
+#[test]
+fn tg_cd_009_no_duplicate_codes() {
+    // Within each domain codebook, all codes must be unique
+    for cb in DOMAIN_REGISTRY {
+        let entries = cb.entries();
+        let mut codes: Vec<u16> = entries.iter().map(|e| e.code).collect();
+        let original_len = codes.len();
+        codes.sort();
+        codes.dedup();
+        assert_eq!(codes.len(), original_len, "Duplicate codes in {}", cb.name);
+    }
+}
+
+#[test]
+fn tg_cd_010_no_empty_mnemonics() {
+    // Every entry in every domain codebook must have a non-empty mnemonic
+    for cb in DOMAIN_REGISTRY {
+        for entry in cb.entries() {
+            assert!(
+                !entry.mnemonic.is_empty(),
+                "Empty mnemonic for code 0x{:04X} in {}",
+                entry.code,
+                cb.name
+            );
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
